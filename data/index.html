@@ -70,6 +70,29 @@
                             <span style="font-size: 0.8rem; color: var(--text-secondary);">Активна сесія пацієнта:</span>
                             <h3 id="activePatientName" style="font-size: 1.25rem; color: var(--accent-green); margin-top: 0.25rem;">Пацієнт</h3>
                         </div>
+                        
+                        <!-- Game Launch Dropdown (Visible only when session is active) -->
+                        <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                            <select id="gameSelect" class="input-field" style="flex: 1; padding: 0.5rem; color: #ffffff; background-color: #1e293b; -webkit-appearance: none; appearance: none;">
+                                <option value="pingpong" style="color: #ffffff;">🎮 Пінг-понг (Smart Bot)</option>
+                                <!-- Future games can be added here -->
+                            </select>
+                            <button class="btn" id="btnModeGame" style="background: linear-gradient(135deg, #ff007a, #7928ca); color: white; border: none; font-weight: 600; box-shadow: 0 4px 15px rgba(255, 0, 122, 0.4); padding: 0.5rem 1rem;">
+                                ▶️ Старт
+                            </button>
+                        </div>
+                        
+                        <!-- Bot Difficulty Selector (Shown only in Game mode) -->
+                        <div id="botDifficultyPanel" style="display: none; flex-direction: column; gap: 0.5rem;">
+                            <label style="font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">Складність Smart Bot:</label>
+                            <select id="botDifficultySelect" class="input-field" style="padding: 0.5rem;">
+                                <option value="auto">🤖 Авто-терапія (Адаптивна)</option>
+                                <option value="easy">🟢 Легкий (Повільний)</option>
+                                <option value="medium">🟡 Середній (Стандарт)</option>
+                                <option value="hard">🔴 Складний (Швидкий)</option>
+                            </select>
+                        </div>
+
                         <button class="btn btn-danger" id="btnStopSession">⏹️ Завершити сесію та зберегти</button>
                     </div>
 
@@ -80,14 +103,20 @@
                         <label>Миттєве калібрування нульової позиції</label>
                         <button class="btn btn-secondary" id="btnRecalibrate">🎯 Рекалібрування 0° на льоту</button>
                     </div>
+                    
+                    <!-- Angle Inversion Toggle -->
+                    <div class="input-group" style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 0.8rem; border-radius: 8px;">
+                        <label for="invertAngleToggle" style="margin: 0; cursor: pointer;">🔄 Інверсія осі (Реверс рухів)</label>
+                        <input type="checkbox" id="invertAngleToggle" style="transform: scale(1.5); cursor: pointer; accent-color: #00f2fe;">
+                    </div>
                 </div>
 
-                <!-- Right column: Interactive angle visualizer -->
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title">🔄 Динамічна візуалізація кута кисті</div>
+                <!-- Right column: Interactive angle visualizer or Game -->
+                <div class="card" style="display: flex; flex-direction: column;">
+                    <div class="card-header" style="margin-bottom: 0;">
+                        <div class="card-title" id="visualizerTitle">🔄 Динамічна візуалізація кута кисті</div>
                     </div>
-                    <div class="visualizer-container">
+                    <div class="visualizer-container" id="visualizerContainer" style="flex: 1;">
                         <div class="circle-wrapper">
                             <div class="circle-background"></div>
                             <div class="circle-indicator" id="circleIndicator">
@@ -280,7 +309,43 @@
             </div>
         </div>
     </div>
+    
+    <!-- Full-Screen Game Overlay Container -->
+    <div id="gameContainer" style="display: none; position: fixed; inset: 0; z-index: 9999; background: #000; flex-direction: column;">
+        <!-- Top Bar with Exit Button -->
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: #0f172a; border-bottom: 1px solid rgba(255,255,255,0.1);">
+            <div style="color: white; font-weight: 600; font-size: 1.2rem;">🎮 Smart Ping-Pong</div>
+            <button id="btnExitGame" class="btn btn-danger" style="padding: 0.5rem 1rem; font-size: 0.9rem;">❌ Вийти / Назад</button>
+        </div>
+        <!-- Game Engine Container -->
+        <div style="flex: 1; position: relative; overflow: hidden;" id="gameEngineWrapper">
+            <!-- Central HUD Layer -->
+            <div id="gameHUD" style="display: none; position: absolute; top: 0; left: 0; width: 100%; padding: 15px; box-sizing: border-box; justify-content: space-between; color: rgba(255,255,255,0.8); font-size: 14px; font-weight: 600; pointer-events: none; z-index: 5;">
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <span id="hudAmplitude">Амплітуда: [0° .. 0°]</span>
+                    <span id="hudScore">Успішні відбивання: 0</span>
+                </div>
+                <div style="text-align: right;">
+                    <span id="hudBotState" style="font-size: 14px; color: #00f2fe;">Стан: Очікування</span>
+                </div>
+            </div>
 
+            <!-- Custom UI Layer for Games -->
+            <div id="custom-game-ui" style="position: absolute; inset: 0; z-index: 6; pointer-events: none;"></div>
+            
+            <!-- Main Game Canvas -->
+            <canvas id="mainGameCanvas" style="width: 100%; height: 100%; display: block;"></canvas>
+
+            <!-- Placeholder before game starts -->
+            <div id="gamePlaceholder" style="position: absolute; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 10;">
+                <div style="text-align: center;">
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">🎮</div>
+                    <h3 id="gamePlaceholderTitle" style="color: #00f2fe; margin-bottom: 0.5rem;">Запуск...</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <script src="app.js"></script>
 </body>
 </html>

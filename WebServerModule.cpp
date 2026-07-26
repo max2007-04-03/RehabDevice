@@ -59,6 +59,9 @@ void WebServerModule::setupRoutes() {
         }
     });
 
+    // Маршрут для раздачи статических файлов игр из папки /games/
+    server.serveStatic("/games", LittleFS, "/games/");
+
     server.on("/download.csv", HTTP_GET, [this](AsyncWebServerRequest *request) {
         Serial.println("[HTTP] GET /download.csv");
         String csvData = memoryFS->generateCSV();

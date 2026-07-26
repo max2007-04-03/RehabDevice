@@ -1,11 +1,142 @@
-// Global WebSocket, Chart, and application state variables
+// Global variables
 let ws = null;
 let doctorChart = null;
 let reconnectInterval = null;
+let isConnected = false;
 let isAuthorized = false;
 let currentPatientName = "";
+let currentAppMode = 'monitor'; 
 let allSessionsData = [];
-let streamedSessionsBuffer = [];
+let streamedSessionsBuffer = []; 
+let sessionCalibMin = null;
+let sessionCalibMax = null;
+
+// Game Engine (Dependency Injection Container)
+const engine = {
+    currentAngle: 0,
+    calibMin: -20,
+    calibMax: 20,
+    difficulty: 'auto',
+    activeGame: null,
+    animationId: null,
+    lastTime: 0,
+    isRunning: false,
+    
+    api: {
+        updateHUD: (key, value) => {
+            const el = document.getElementById(key);
+            if (el) el.textContent = value;
+        },
+        updateCalibration: (min, max) => {
+            engine.calibMin = min;
+            engine.calibMax = max;
+        },
+        setCustomHTML: (htmlString) => {
+            const container = document.getElementById("custom-game-ui");
+            if (container) {
+                container.innerHTML = htmlString;
+                // Allow interaction if HTML is present
+                container.style.pointerEvents = htmlString.trim() ? "auto" : "none";
+            }
+        },
+        clearCustomHTML: () => {
+            const container = document.getElementById("custom-game-ui");
+            if (container) {
+                container.innerHTML = '';
+                container.style.pointerEvents = "none";
+            }
+        }
+    },
+    
+    loadGame: (gameId, callback) => {
+        window.RehabGames = window.RehabGames || {};
+        if (window.RehabGames[gameId]) {
+            return callback();
+        }
+        const script = document.createElement('script');
+        script.src = `/games/${gameId}/game.js`;
+        script.onload = callback;
+        document.body.appendChild(script);
+    },
+    
+    startGame: (gameId, minAngle, maxAngle) => {
+        engine.calibMin = minAngle;
+        engine.calibMax = maxAngle;
+        engine.loadGame(gameId, () => {
+            const canvas = document.getElementById("mainGameCanvas");
+            const ctx = canvas.getContext("2d");
+            
+            if (engine.activeGame && engine.activeGame.stop) {
+                engine.activeGame.stop();
+            }
+            engine.api.clearCustomHTML();
+            
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            
+            const GameClass = window.RehabGames[gameId];
+            engine.activeGame = new GameClass(ctx, engine.api);
+            if (engine.activeGame.resize) engine.activeGame.resize(canvas.width, canvas.height);
+            engine.activeGame.init(engine.calibMin, engine.calibMax, engine.difficulty);
+            
+            document.getElementById("gamePlaceholder").style.display = "none";
+            document.getElementById("gameHUD").style.display = "flex";
+            
+            if (!engine.isRunning) {
+                engine.isRunning = true;
+                engine.lastTime = performance.now();
+                engine.loop(engine.lastTime);
+            }
+        });
+    },
+    
+    stopGame: () => {
+        engine.isRunning = false;
+        if (engine.animationId) {
+            cancelAnimationFrame(engine.animationId);
+            engine.animationId = null;
+        }
+        if (engine.activeGame && engine.activeGame.stop) {
+            engine.activeGame.stop();
+        }
+        engine.activeGame = null;
+        engine.api.clearCustomHTML();
+        
+        const ph = document.getElementById("gamePlaceholder");
+        if (ph) ph.style.display = "flex";
+        const title = document.getElementById("gamePlaceholderTitle");
+        if (title) title.textContent = "Сесія завершена";
+        const hud = document.getElementById("gameHUD");
+        if (hud) hud.style.display = "none";
+    },
+    
+    loop: (time) => {
+        if (!engine.isRunning) return;
+        let dt = (time - engine.lastTime) / 1000;
+        engine.lastTime = time;
+        if (dt > 0.1) dt = 0.016;
+        
+        if (engine.activeGame) {
+            engine.activeGame.update(dt, engine.currentAngle);
+            engine.activeGame.draw();
+            engine.api.updateHUD("hudAmplitude", `Амплітуда: [${engine.calibMin.toFixed(1)}° .. ${engine.calibMax.toFixed(1)}°]`);
+        }
+        
+        engine.animationId = requestAnimationFrame(engine.loop);
+    }
+};
+
+window.addEventListener('resize', () => {
+    if (engine.activeGame && engine.isRunning) {
+        const canvas = document.getElementById("mainGameCanvas");
+        if (canvas && canvas.parentElement) {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            if (engine.activeGame.resize) engine.activeGame.resize(canvas.width, canvas.height);
+        }
+    }
+});
+
 let selectedDoctorPatient = "ALL";
 let usePolling = false;
 let pollTimer = null;
@@ -61,9 +192,9 @@ function startHttpPolling() {
     document.getElementById("statusDot").classList.add("connected");
     document.getElementById("statusText").textContent = "Пристрій підключено";
 
-    // Synchronize client timestamp with ESP32
-    const nowUnix = Math.floor(Date.now() / 1000);
-    fetch(`/api/cmd?action=syncTime&timestamp=${nowUnix}`).catch(() => {});
+    // Synchronize client timestamp with ESP32 (applying local timezone offset)
+    const localUnix = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
+    fetch(`/api/cmd?action=syncTime&timestamp=${localUnix}`).catch(() => {});
 
     // Load initial sessions list
     fetch("/api/sessions")
@@ -114,7 +245,8 @@ function initWebSocket() {
             pollTimer = null;
         }
 
-        sendCommand("syncTime", { timestamp: Math.floor(Date.now() / 1000) });
+        const localUnix = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
+        sendCommand("syncTime", { timestamp: localUnix });
         sendCommand("getSessions");
     };
 
@@ -144,6 +276,13 @@ function initWebSocket() {
 // Process incoming telemetry and status messages from ESP32
 function handleServerMessage(data) {
     if (data.type === "angle") {
+        const invertToggle = document.getElementById("invertAngleToggle");
+        if (invertToggle && invertToggle.checked) {
+            data.angle = -data.angle;
+        }
+        
+        engine.currentAngle = data.angle;
+        
         // Real-time angle update on visual circle (works in guest and active modes)
         const circle = document.getElementById("circleIndicator");
         const valElem = document.getElementById("angleValueElem");
@@ -315,6 +454,33 @@ function setupEventListeners() {
     document.getElementById("targetNormInput")?.addEventListener("input", () => {
         updateDoctorDashboardView();
     });
+
+    const btnModeGame = document.getElementById("btnModeGame");
+    const btnExitGame = document.getElementById("btnExitGame");
+    const gameContainer = document.getElementById("gameContainer");
+
+    if (btnModeGame) {
+        btnModeGame.addEventListener("click", () => {
+            currentAppMode = 'game';
+            if (gameContainer) gameContainer.style.display = "flex";
+            notifySessionStartedToEngine();
+        });
+    }
+    
+    if (btnExitGame) {
+        btnExitGame.addEventListener("click", () => {
+            currentAppMode = 'monitor';
+            if (gameContainer) gameContainer.style.display = "none";
+            engine.stopGame();
+        });
+    }
+
+    const botDifficultySelect = document.getElementById("botDifficultySelect");
+    if (botDifficultySelect) {
+        botDifficultySelect.addEventListener("change", (e) => {
+            engine.difficulty = e.target.value;
+        });
+    }
 }
 
 // Switch between Guest UI and Authorized Patient UI
@@ -826,3 +992,50 @@ function showCustomConfirm(title, text, okBtnText, onConfirm) {
         onConfirm();
     };
 }
+
+
+// Automatically start game in engine if in game mode
+function notifySessionStartedToEngine() {
+    let calibMin = -20;
+    let calibMax = 20;
+    
+    if (sessionCalibMin !== null && sessionCalibMax !== null) {
+        calibMin = sessionCalibMin;
+        calibMax = sessionCalibMax;
+    } else if (currentPatientName && allSessionsData) {
+        const patientSessions = allSessionsData.filter(s => s.patientId === currentPatientName);
+        if (patientSessions.length > 0) {
+            patientSessions.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+            const lastSession = patientSessions[0];
+            if (lastSession.minAngle !== undefined && lastSession.maxAngle !== undefined) {
+                calibMin = parseFloat(lastSession.minAngle) || 0;
+                calibMax = parseFloat(lastSession.maxAngle) || 0;
+                if (calibMax - calibMin < 10) { 
+                    calibMin -= 5; calibMax += 5;
+                }
+            }
+        }
+    }
+    
+    if (currentAppMode === 'game') {
+        const gameSelect = document.getElementById("gameSelect");
+        if (gameSelect) {
+            engine.startGame(gameSelect.value, calibMin, calibMax);
+        }
+    }
+}
+
+// Modify btnStartSession to notify engine
+document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("btnStopSession").addEventListener("click", () => {
+        engine.stopGame();
+        
+        const gameContainer = document.getElementById("gameContainer");
+        if (gameContainer) gameContainer.style.display = 'none';
+        currentAppMode = 'monitor';
+        
+        // Reset session calibration cache
+        sessionCalibMin = null;
+        sessionCalibMax = null;
+    });
+});
