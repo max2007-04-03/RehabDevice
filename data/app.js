@@ -8,8 +8,6 @@ let currentPatientName = "";
 let currentAppMode = 'monitor'; 
 let allSessionsData = [];
 let streamedSessionsBuffer = []; 
-let sessionCalibMin = null;
-let sessionCalibMax = null;
 
 // Game Engine (Dependency Injection Container)
 const engine = {
@@ -59,9 +57,7 @@ const engine = {
         document.body.appendChild(script);
     },
     
-    startGame: (gameId, minAngle, maxAngle) => {
-        engine.calibMin = minAngle;
-        engine.calibMax = maxAngle;
+    startGame: (gameId) => {
         engine.loadGame(gameId, () => {
             const canvas = document.getElementById("mainGameCanvas");
             const ctx = canvas.getContext("2d");
@@ -108,6 +104,10 @@ const engine = {
         if (title) title.textContent = "Сесія завершена";
         const hud = document.getElementById("gameHUD");
         if (hud) hud.style.display = "none";
+        
+        const gc = document.getElementById("gameContainer");
+        if (gc) gc.style.display = "none";
+        currentAppMode = 'monitor';
     },
     
     loop: (time) => {
@@ -163,7 +163,7 @@ function sendCommand(cmd, params) {
         fetch(url).then(() => {
             // Poll immediately after executing command
             setTimeout(pollOnce, 400);
-        }).catch(e => console.error("[HTTP] Command error:", e));
+        }).catch(() => {});
     }
 }
 
@@ -171,14 +171,11 @@ function sendCommand(cmd, params) {
 function initConnection() {
     try {
         initWebSocket();
-    } catch (e) {
-        console.warn("[Connection] WebSocket unavailable, switching to HTTP:", e);
-    }
+    } catch (e) {}
 
     // If WebSocket fails to open within 3 seconds, activate HTTP polling fallback
     setTimeout(() => {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-            console.log("[Connection] WebSocket failed to open, activating HTTP polling");
             usePolling = true;
             if (ws) { try { ws.close(); } catch(e) {} ws = null; }
             if (reconnectInterval) { clearInterval(reconnectInterval); reconnectInterval = null; }
@@ -231,7 +228,6 @@ function initWebSocket() {
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-        console.log("[WebSocket] Connection established");
         usePolling = false;
         document.getElementById("statusDot").classList.add("connected");
         document.getElementById("statusText").textContent = "Пристрій підключено";
@@ -254,7 +250,6 @@ function initWebSocket() {
 
     ws.onclose = () => {
         if (usePolling) return;
-        console.log("[WebSocket] Connection closed");
         document.getElementById("statusDot").classList.remove("connected");
         document.getElementById("statusText").textContent = "Відключено (перепідключення...)";
         
@@ -383,11 +378,31 @@ function setupEventListeners() {
         sendCommand("startSession", { patientId: name });
         isAuthorized = true;
         currentPatientName = name;
+        
+        // Extract baseline calibration from history for this patient
+        engine.calibMin = -20;
+        engine.calibMax = 20;
+        if (allSessionsData) {
+            const patientSessions = allSessionsData.filter(s => s.patientId === name);
+            if (patientSessions.length > 0) {
+                patientSessions.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+                const last = patientSessions[0];
+                if (last.minAngle !== undefined && last.maxAngle !== undefined) {
+                    let min = parseFloat(last.minAngle) || 0;
+                    let max = parseFloat(last.maxAngle) || 0;
+                    if (max - min < 10) { min -= 5; max += 5; }
+                    engine.calibMin = min;
+                    engine.calibMax = max;
+                }
+            }
+        }
+        
         showAuthorizedUI();
     });
 
     // Stop session button
     document.getElementById("btnStopSession").addEventListener("click", () => {
+        engine.stopGame();
         sendCommand("stopSession");
         isAuthorized = false;
         showGuestUI();
@@ -463,14 +478,15 @@ function setupEventListeners() {
         btnModeGame.addEventListener("click", () => {
             currentAppMode = 'game';
             if (gameContainer) gameContainer.style.display = "flex";
-            notifySessionStartedToEngine();
+            const gameSelect = document.getElementById("gameSelect");
+            if (gameSelect) {
+                engine.startGame(gameSelect.value);
+            }
         });
     }
     
     if (btnExitGame) {
         btnExitGame.addEventListener("click", () => {
-            currentAppMode = 'monitor';
-            if (gameContainer) gameContainer.style.display = "none";
             engine.stopGame();
         });
     }
@@ -993,49 +1009,4 @@ function showCustomConfirm(title, text, okBtnText, onConfirm) {
     };
 }
 
-
-// Automatically start game in engine if in game mode
-function notifySessionStartedToEngine() {
-    let calibMin = -20;
-    let calibMax = 20;
-    
-    if (sessionCalibMin !== null && sessionCalibMax !== null) {
-        calibMin = sessionCalibMin;
-        calibMax = sessionCalibMax;
-    } else if (currentPatientName && allSessionsData) {
-        const patientSessions = allSessionsData.filter(s => s.patientId === currentPatientName);
-        if (patientSessions.length > 0) {
-            patientSessions.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
-            const lastSession = patientSessions[0];
-            if (lastSession.minAngle !== undefined && lastSession.maxAngle !== undefined) {
-                calibMin = parseFloat(lastSession.minAngle) || 0;
-                calibMax = parseFloat(lastSession.maxAngle) || 0;
-                if (calibMax - calibMin < 10) { 
-                    calibMin -= 5; calibMax += 5;
-                }
-            }
-        }
-    }
-    
-    if (currentAppMode === 'game') {
-        const gameSelect = document.getElementById("gameSelect");
-        if (gameSelect) {
-            engine.startGame(gameSelect.value, calibMin, calibMax);
-        }
-    }
-}
-
-// Modify btnStartSession to notify engine
-document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("btnStopSession").addEventListener("click", () => {
-        engine.stopGame();
-        
-        const gameContainer = document.getElementById("gameContainer");
-        if (gameContainer) gameContainer.style.display = 'none';
-        currentAppMode = 'monitor';
-        
-        // Reset session calibration cache
-        sessionCalibMin = null;
-        sessionCalibMax = null;
-    });
-});
+// Bottom script execution handled
