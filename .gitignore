@@ -1,5 +1,21 @@
-# Generated documentation files
-Документація_проєкту_RehabDevice.docx
-RehabDevice_Documentation.docx
+# PlatformIO
+.pio/
+.pio
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Documentation files
 *.docx
 *.pdf
+Документація_проєкту_RehabDevice.docx
+RehabDevice_Documentation.docx
+
+# Compiled files
+*.bin
+*.elf
