@@ -8,13 +8,13 @@
 #include <sys/time.h>
 #include "Config.h"
 #include "SensorMPU.h"
-#include "MemoryFS.h"
+#include "SDManager.h"
 #include "AnalyticsEngine.h"
 #include "WiFiManagerModule.h"
 
 class WebServerModule {
 public:
-    WebServerModule(SensorMPU* sensorPtr, MemoryFS* fsPtr, AnalyticsEngine* analyticsPtr, WiFiManagerModule* wifiPtr);
+    WebServerModule(SensorMPU* sensorPtr, AnalyticsEngine* analyticsPtr, WiFiManagerModule* wifiPtr);
     
     // Initialize HTTP server routes and WebSocket handlers
     void init();
@@ -45,7 +45,6 @@ private:
     AsyncWebSocket ws;
 
     SensorMPU* sensor;
-    MemoryFS* memoryFS;
     AnalyticsEngine* analytics;
     WiFiManagerModule* wifi;
 
@@ -64,6 +63,12 @@ private:
 
     void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type,
                    void* arg, uint8_t* data, size_t len);
+    
+    // Defer session state changes to main loop (Core 1) to avoid blocking AsyncTCP
+    bool pendingStartSession = false;
+    bool pendingStopSession = false;
+    String pendingPatientId = "";
+
     void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, size_t len);
 
     void setupRoutes();

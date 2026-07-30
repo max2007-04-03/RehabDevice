@@ -8,7 +8,8 @@
 // ============================================================================
 #define PIN_I2C_SDA             21
 #define PIN_I2C_SCL             22
-#define PIN_MPU_INT             19  // Hardware interrupt pin from MPU6050 (INT)
+#define PIN_MPU_INT             17  // Hardware interrupt pin from MPU6050 (INT)
+#define SD_CS_PIN               5   // SPI Chip Select pin for SD Card Module
 
 // ============================================================================
 // WI-FI SOFTAP AND CAPTIVE PORTAL SETTINGS

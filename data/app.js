@@ -1,4 +1,12 @@
 // Global variables
+
+// Always use the fixed AP IP for all network requests.
+// window.location.host is unreliable in iOS captive portal mode:
+// Apple's CNA browser spoofs the host as e.g. "netcts.cdn-apple.com",
+// which causes WebSocket and fetch() to connect to the wrong server.
+const DEVICE_HOST = "http://192.168.4.1";
+const DEVICE_WS   = "ws://192.168.4.1/ws";
+
 let ws = null;
 let doctorChart = null;
 let reconnectInterval = null;
@@ -141,20 +149,27 @@ let selectedDoctorPatient = "ALL";
 let usePolling = false;
 let pollTimer = null;
 
-// Initialize on DOM content loaded
-document.addEventListener("DOMContentLoaded", () => {
+// Initialize application
+function initApp() {
     initConnection();
     setupTabNavigation();
     setupEventListeners();
     initChart();
-});
+}
+
+// Initialize on DOM content loaded (or immediately if already loaded via dynamic script injection)
+if (document.readyState === 'loading') {
+    document.addEventListener("DOMContentLoaded", initApp);
+} else {
+    initApp();
+}
 
 // Send commands via WebSocket if open, otherwise fallback to HTTP API
 function sendCommand(cmd, params) {
     if (!usePolling && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(Object.assign({ cmd: cmd }, params || {})));
     } else {
-        let url = `/api/cmd?action=${encodeURIComponent(cmd)}`;
+        let url = `${DEVICE_HOST}/api/cmd?action=${encodeURIComponent(cmd)}`;
         if (params) {
             for (const [k, v] of Object.entries(params)) {
                 url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
@@ -191,13 +206,13 @@ function startHttpPolling() {
 
     // Synchronize client timestamp with ESP32 (applying local timezone offset)
     const localUnix = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
-    fetch(`/api/cmd?action=syncTime&timestamp=${localUnix}`).catch(() => {});
+    fetch(`${DEVICE_HOST}/api/cmd?action=syncTime&timestamp=${localUnix}`).catch(() => {});
 
     // Load initial sessions list
-    fetch("/api/sessions")
+    fetch(`${DEVICE_HOST}/api/sessions`)
         .then(r => r.json())
         .then(data => {
-            allSessionsData = data.sessions || [];
+            allSessionsData = data || [];
             renderPatientPills(allSessionsData);
             updateDoctorDashboardView();
         }).catch(() => {});
@@ -207,7 +222,7 @@ function startHttpPolling() {
 }
 
 function pollOnce() {
-    fetch("/api/status")
+    fetch(`${DEVICE_HOST}/api/status`)
         .then(r => r.json())
         .then(data => {
             document.getElementById("statusDot").classList.add("connected");
@@ -224,7 +239,7 @@ function pollOnce() {
 
 // Initialize WebSocket connection and handlers
 function initWebSocket() {
-    const wsUrl = `ws://${window.location.host || "192.168.4.1"}/ws`;
+    const wsUrl = DEVICE_WS;
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -317,8 +332,7 @@ function handleServerMessage(data) {
         document.getElementById("statFlex").textContent = `${data.flexionsCount}`;
         document.getElementById("statHold").textContent = `${data.holdingTime.toFixed(1)} с`;
     } else if (data.type === "sessionsList") {
-        // Store all sessions, render patient pills, and update doctor dashboard
-        allSessionsData = data.sessions || [];
+        allSessionsData = data.sessions || data || [];
         renderPatientPills(allSessionsData);
         updateDoctorDashboardView();
     } else if (data.type === "sessionsStreamStart") {
@@ -782,6 +796,9 @@ function renderDoctorSessions(sessions) {
             <td style="color:#00e676; font-weight:700;">${rec.smoothness?.toFixed(0)}%</td>
             <td>${rec.flexionsCount || 0}</td>
             <td style="text-align: center;">
+                <button class="btn" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: rgba(0,242,254,0.18); border-color: rgba(0,242,254,0.4); color: #00f2fe; margin-right: 4px;" onclick="downloadDetailedBinary('${rec.patientId || ""}', '${rec.timestamp || 0}')" title="Завантажити детальний графік (CSV)">
+                    📥 CSV
+                </button>
                 <button class="btn" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: rgba(255,23,68,0.18); border-color: rgba(255,23,68,0.4); color: #ff1744;" onclick="deleteSingleSession('${rec.filename || ""}', '${rec.dateStr || ""}', '${rec.patientId || ""}')" title="Видалити лише цей помилковий запис">
                     🗑️
                 </button>
@@ -952,11 +969,11 @@ function deleteSingleSession(filename, dateStr, patientId) {
 // Download filtered or global dataset as CSV with BOM for Excel compatibility
 function downloadFilteredCSV() {
     let filtered = allSessionsData;
-    let fileName = "Rehab_All_Sessions.csv";
+    let fileName = "Rehab_All_Sessions_Summary.csv";
 
     if (selectedDoctorPatient && selectedDoctorPatient !== "ALL") {
         filtered = allSessionsData.filter(s => (s.patientId || "Пацієнт").trim() === selectedDoctorPatient);
-        fileName = `Rehab_Client_${selectedDoctorPatient.replace(/\s+/g, "_")}.csv`;
+        fileName = `Rehab_Summary_${selectedDoctorPatient.replace(/\s+/g, "_")}.csv`;
     }
 
     if (filtered.length === 0) {
@@ -964,11 +981,11 @@ function downloadFilteredCSV() {
         return;
     }
 
-    let csv = "\uFEFFІм'я Пацієнта,Дата і Час,Мінімальний кут (град),Максимальний кут (град),Амплітуда (град),Середня швидкість (град/с),Плавність (%),Кількість згинань,Час утримання (с)\r\n";
+    let csv = "\uFEFFІм'я Пацієнта,Мінімальний кут (град),Максимальний кут (град),Амплітуда (град),Середня швидкість (град/с),Плавність (%),Кількість згинань,Час утримання (с)\r\n";
 
     filtered.forEach(rec => {
         const cleanName = (rec.patientId || "Пацієнт").replace(/,/g, " ");
-        csv += `${cleanName},${rec.dateStr || ""},${(rec.minAngle || 0).toFixed(2)},${(rec.maxAngle || 0).toFixed(2)},${(rec.amplitude || 0).toFixed(2)},${(rec.avgSpeed || 0).toFixed(2)},${(rec.smoothness || 0).toFixed(2)},${rec.flexionsCount || 0},${(rec.holdingTime || 0).toFixed(2)}\r\n`;
+        csv += `${cleanName},${(rec.minAngle || 0).toFixed(2)},${(rec.maxAngle || 0).toFixed(2)},${(rec.amplitude || 0).toFixed(2)},${(rec.avgSpeed || 0).toFixed(2)},${(rec.smoothness || 0).toFixed(2)},${rec.flexionsCount || 0},${(rec.holdingTime || 0).toFixed(2)}\r\n`;
     });
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -979,6 +996,67 @@ function downloadFilteredCSV() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+}
+
+// Download and parse binary file to detailed CSV
+async function downloadDetailedBinary(patientId, timestamp) {
+    if (!patientId) return;
+    
+    // UI Feedback
+    const btnId = `btn_download_${timestamp}`;
+    
+    try {
+        const response = await fetch(`${DEVICE_HOST}/api/download_bin?id=${encodeURIComponent(patientId)}`);
+        if (!response.ok) {
+            alert("Помилка завантаження файлу. Можливо він був видалений.");
+            return;
+        }
+        
+        const buffer = await response.arrayBuffer();
+        if (buffer.byteLength === 0) {
+            alert("Файл порожній.");
+            return;
+        }
+        
+        const view = new DataView(buffer);
+        const recordCount = buffer.byteLength / 32; // 32 bytes per LogItem
+        
+        let csv = "\uFEFFЧас (мс),Кут (град),Швидкість (град/с),Статус\r\n";
+        
+        for (let i = 0; i < recordCount; i++) {
+            const offset = i * 32;
+            const timeMs = view.getUint32(offset, true);
+            const roll = (view.getInt16(offset + 10, true) / 131.0); // Rough approximation for gyro/accel to angle if it was stored as raw, but we store roll?
+            // Actually, wait, LogItem struct:
+            // uint32 timestamp, int16 accel[3], int16 gyro[3], uint16 status, reserved[14]
+            // We'll just export raw accel/gyro
+            const ax = view.getInt16(offset + 4, true);
+            const ay = view.getInt16(offset + 6, true);
+            const az = view.getInt16(offset + 8, true);
+            const gx = view.getInt16(offset + 10, true);
+            const gy = view.getInt16(offset + 12, true);
+            const gz = view.getInt16(offset + 14, true);
+            const status = view.getUint16(offset + 16, true);
+            
+            csv += `${timeMs},${ax},${ay},${az},${gx},${gy},${gz},${status}\r\n`;
+        }
+        
+        // Let's modify the CSV header to match the struct fields perfectly
+        let correctCsv = "\uFEFFTimestamp(ms),Accel_X,Accel_Y,Accel_Z,Gyro_X,Gyro_Y,Gyro_Z,Status\r\n";
+        correctCsv += csv.substring(csv.indexOf('\n') + 1);
+        
+        const blob = new Blob([correctCsv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `Detailed_${patientId}_${timestamp}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+    } catch (e) {
+        alert("Помилка мережі при завантаженні детального графіка.");
+    }
 }
 
 // Custom confirmation modal implementation (compatible with iOS and Android Captive Portal)

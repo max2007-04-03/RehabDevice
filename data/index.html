@@ -346,6 +346,13 @@
         </div>
     </div>
     
-    <script src="app.js"></script>
+    <!-- Динамічне завантаження скрипта після CSS для розвантаження SD-карти (захист від Sector Thrashing) -->
+    <script>
+        window.addEventListener('load', function() {
+            var script = document.createElement('script');
+            script.src = 'app.js';
+            document.body.appendChild(script);
+        });
+    </script>
 </body>
 </html>

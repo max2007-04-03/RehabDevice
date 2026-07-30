@@ -1,17 +1,16 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "SensorMPU.h"
-#include "MemoryFS.h"
+#include "SDManager.h"
 #include "AnalyticsEngine.h"
 #include "WiFiManagerModule.h"
 #include "WebServerModule.h"
 
 // Global firmware module instances
 SensorMPU sensor;
-MemoryFS memoryFS;
 AnalyticsEngine analytics;
 WiFiManagerModule wifiManager;
-WebServerModule webServer(&sensor, &memoryFS, &analytics, &wifiManager);
+WebServerModule webServer(&sensor, &analytics, &wifiManager);
 
 // Timer for periodic angle broadcast (~30 FPS)
 unsigned long lastWsBroadcastMs = 0;
@@ -24,9 +23,9 @@ void setup() {
     Serial.println("  RehabDevice — Wrist Rehabilitation Monitoring System (ESP32)");
     Serial.println("====================================================================");
 
-    // 1. Initialize LittleFS storage and memory management
-    if (!memoryFS.init()) {
-        Serial.println("[Setup] Error: Failed to initialize MemoryFS!");
+    // 1. Initialize SD card and FreeRTOS tasks
+    if (!SDManager::init(5)) {
+        Serial.println("[Setup] Error: Failed to initialize SDManager!");
     }
 
     // 2. Initialize MPU6050 gyroscope/accelerometer (DMP + INT interrupts)

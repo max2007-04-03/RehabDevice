@@ -36,7 +36,7 @@ void AnalyticsEngine::startSession(const String& patientName) {
                   patientId.c_str(), getFormattedDateTime().c_str());
 }
 
-bool AnalyticsEngine::stopSession(MemoryFS* fs) {
+bool AnalyticsEngine::stopSession() {
     if (!sessionActive) return false;
 
     SessionRecord record = getCurrentRecord();
@@ -45,10 +45,7 @@ bool AnalyticsEngine::stopSession(MemoryFS* fs) {
     Serial.printf("[AnalyticsEngine] Session stopped. Flexions: %d, Smoothness: %.1f%%, Holding: %.1f s\n", 
                   record.flexionsCount, record.smoothness, record.holdingTime);
 
-    if (fs) {
-        return fs->saveSession(record);
-    }
-    return false;
+    return SDManager::saveSessionSummary(record);
 }
 
 void AnalyticsEngine::processData(const MPUData& data) {

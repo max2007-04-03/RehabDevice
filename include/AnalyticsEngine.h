@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <sys/time.h>
 #include "SensorMPU.h"
-#include "MemoryFS.h"
+#include "SDManager.h"
 #include "Config.h"
 
 // Current state of the adaptive extreme points detector
@@ -21,8 +21,8 @@ public:
     // Start tracking session for a specific patient
     void startSession(const String& patientName);
     
-    // Stop tracking session and save record to LittleFS
-    bool stopSession(MemoryFS* fs);
+    // Stop tracking session and return record
+    bool stopSession();
     
     // Process new sensor data sample (called from main loop on data update)
     void processData(const MPUData& data);

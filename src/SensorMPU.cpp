@@ -7,15 +7,21 @@ void IRAM_ATTR SensorMPU::dmpDataReadyISR() {
 }
 
 SensorMPU::SensorMPU() : dmpReady(false), mpuIntStatus(0), devStatus(0), packetSize(0), fifoCount(0),
-                         pitchOffset(0.0f), rollOffset(0.0f), yawOffset(0.0f) {
+                         pitchOffset(0.0f), rollOffset(0.0f), yawOffset(0.0f),
+                         lastSuccessMs(0), lastRecoveryMs(0), lastOverflowMs(0), overflowCount(0) {
     memset(&currentData, 0, sizeof(currentData));
 }
 
 bool SensorMPU::init() {
-    // Initialize I2C bus at 100 kHz for stability
+    // 100 kHz is significantly more stable for GY-521 clone chips (WHO_AM_I = 0x70)
+    // on breadboards with long wires and no dedicated pull-ups.
+    // The higher capacitance of breadboard connections causes edge degradation
+    // at 400 kHz which manifests as "i2cWriteReadNonStop returned Error -1".
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 100000);
+    Wire.setTimeOut(20); // 20 ms timeout: long enough for a healthy 100 kHz read,
+                         // short enough to unblock the loop when bus is stuck.
     delay(100);
-    
+
     // Check WHO_AM_I register (0x75) to identify chip (MPU6050/6500/clone)
     Wire.beginTransmission(0x68);
     Wire.write(0x75);
@@ -26,7 +32,7 @@ bool SensorMPU::init() {
 
     mpu.initialize();
     delay(50);
-    
+
     bool conn = mpu.testConnection();
     if (!conn && whoAmI != 0x68 && whoAmI != 0x70 && whoAmI != 0x71 && whoAmI != 0x73 && whoAmI != 0x98) {
         Serial.printf("[SensorMPU] Error: MPU6050 not found (testConnection=false, whoAmI=0x%02X)!\n", whoAmI);
@@ -49,6 +55,9 @@ bool SensorMPU::init() {
         mpu.CalibrateGyro(6);
         mpu.PrintActiveOffsets();
 
+        // REMOVED: setRate() ruins DMP integration math (scales down angles)
+        // mpu.setRate(9);
+
         Serial.println("[SensorMPU] Enabling DMP...");
         mpu.setDMPEnabled(true);
 
@@ -59,13 +68,16 @@ bool SensorMPU::init() {
         packetSize = mpu.dmpGetFIFOPacketSize();
         dmpReady = true;
 
-        // Switch I2C clock to 400 kHz for high-speed operation in main loop
-        Wire.setClock(400000);
+        Wire.setClock(100000); // Keep 100 kHz after DMP init
         mpu.resetFIFO();
-        mpuInterrupt = false;
-        fifoCount = 0;
+        mpuInterrupt  = false;
+        fifoCount     = 0;
+        lastSuccessMs  = 0;
+        lastRecoveryMs = 0;
+        lastOverflowMs = 0;
+        overflowCount  = 0;
 
-        Serial.println("[SensorMPU] DMP initialized successfully! Ready (400 kHz).");
+        Serial.println("[SensorMPU] DMP initialized successfully! Ready (100 kHz, 20 Hz).");
         return true;
     } else {
         Serial.printf("[SensorMPU] DMP initialization error (code %d)\n", devStatus);
@@ -73,24 +85,129 @@ bool SensorMPU::init() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// I2C bus recovery
+//
+// Sends up to 9 SCL clock pulses to force any slave that is holding SDA low
+// to release it, then issues a STOP condition and re-initialises Wire.
+// Because Wire.begin() stops and restarts the I2C peripheral it must be
+// followed by Wire.setClock() to restore the desired speed.
+//
+// NOTE: recoverI2C() does NOT reinitialise the MPU6050 registers.
+//       The chip's internal DMP state and calibration survive as long as
+//       power is maintained; only the I2C bus driver on the host side is reset.
+// ---------------------------------------------------------------------------
+void SensorMPU::recoverI2C() {
+    Serial.println("[SensorMPU] Performing I2C bus recovery (9-clock pulse)...");
+
+    // Temporarily take GPIO control of SCL / SDA
+    pinMode(PIN_I2C_SCL, OUTPUT);
+    pinMode(PIN_I2C_SDA, OUTPUT);
+    digitalWrite(PIN_I2C_SCL, HIGH);
+    digitalWrite(PIN_I2C_SDA, HIGH);
+    delayMicroseconds(10);
+
+    for (int i = 0; i < 9; i++) {
+        digitalWrite(PIN_I2C_SCL, LOW);
+        delayMicroseconds(5);
+        digitalWrite(PIN_I2C_SCL, HIGH);
+        delayMicroseconds(5);
+        if (digitalRead(PIN_I2C_SDA) == HIGH) break; // Slave released SDA
+    }
+
+    // STOP condition: SDA rises while SCL is HIGH
+    digitalWrite(PIN_I2C_SDA, LOW);
+    delayMicroseconds(5);
+    digitalWrite(PIN_I2C_SCL, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(PIN_I2C_SDA, HIGH);
+    delayMicroseconds(5);
+
+    // Return SCL/SDA to open-drain Wire control
+    pinMode(PIN_I2C_SCL, INPUT_PULLUP);
+    pinMode(PIN_I2C_SDA, INPUT_PULLUP);
+    delayMicroseconds(10);
+
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 100000);
+    Wire.setTimeOut(20);
+
+    // Allow the MPU6050 to settle before the next I2C transaction
+    delay(10);
+
+    // If the sensor browned out and reset, its sleep mode is enabled (default)
+    // or DMP is disabled. We must re-initialize it completely.
+    if (mpu.getSleepEnabled() || !mpu.testConnection()) {
+        Serial.println("[SensorMPU] MPU6050 seems to have reset (brownout)! Re-initializing...");
+        if (init()) {
+            Serial.println("[SensorMPU] Re-initialization successful.");
+        } else {
+            Serial.println("[SensorMPU] Re-initialization failed.");
+        }
+    } else {
+        mpu.resetFIFO();
+        mpuInterrupt = false;
+        fifoCount    = 0;
+    }
+
+    Serial.println("[SensorMPU] I2C bus recovery complete.");
+}
+
+
 void SensorMPU::update() {
     if (!dmpReady) return;
 
+    // --- Back-off after FIFO overflow (100 ms cooldown) ---
+    if (lastOverflowMs != 0 && (millis() - lastOverflowMs) < 100) {
+        return;
+    }
+
+    // Nothing to do yet
     if (!mpuInterrupt && fifoCount < packetSize) {
         return;
     }
 
-    mpuInterrupt = false;
-    mpuIntStatus = mpu.getIntStatus();
-    fifoCount = mpu.getFIFOCount();
+    unsigned long now = millis();
 
-    if ((mpuIntStatus & (0x01 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT)) || fifoCount >= 1024) {
-        mpu.resetFIFO();
-        fifoCount = 0;
-        Serial.println("[SensorMPU] Warning: FIFO overflow, buffer reset!");
+    // --- Stall detection --------------------------------------------------
+    // If the interrupt flag has been set but we have not decoded a valid
+    // packet for more than 800 ms the I2C bus is likely stuck.
+    // Trigger a recovery at most once every 8 seconds to avoid hammering
+    // Wire.begin() and disrupting SD-card SPI timing.
+    // (The 800 ms threshold is well above the 50 ms packet interval at 20 Hz.)
+    if (lastSuccessMs > 0 && mpuInterrupt && (now - lastSuccessMs) > 800) {
+        if (now - lastRecoveryMs > 8000) {
+            recoverI2C();
+            lastRecoveryMs = now;
+        } else {
+            // Recovery throttled — just reset FIFO and wait
+            mpu.resetFIFO();
+            mpuInterrupt = false;
+            fifoCount    = 0;
+        }
         return;
     }
 
+    mpuInterrupt  = false;
+    mpuIntStatus  = mpu.getIntStatus();
+    fifoCount     = mpu.getFIFOCount();
+
+    // --- FIFO overflow handling -------------------------------------------
+    if ((mpuIntStatus & (0x01 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT)) || fifoCount >= 1024) {
+        overflowCount++;
+        lastOverflowMs = now;
+
+        // Throttle Serial output: print only every 5th overflow
+        if (overflowCount % 5 == 1) {
+            Serial.printf("[SensorMPU] FIFO overflow #%lu — buffer reset\n", overflowCount);
+        }
+
+        mpu.resetFIFO();
+        fifoCount    = 0;
+        mpuInterrupt = false;
+        return;
+    }
+
+    // --- Normal DMP packet read -------------------------------------------
     if ((mpuIntStatus & 0x02) || fifoCount >= packetSize) {
         if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) {
             fifoCount = mpu.getFIFOCount();
@@ -110,9 +227,9 @@ void SensorMPU::update() {
             int16_t gx, gy, gz, ax, ay, az;
             mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-            float rawYaw = ypr[0] * 180.0f / M_PI;
+            float rawYaw   = ypr[0] * 180.0f / M_PI;
             float rawPitch = ypr[1] * 180.0f / M_PI;
-            float rawRoll = ypr[2] * 180.0f / M_PI;
+            float rawRoll  = ypr[2] * 180.0f / M_PI;
 
             if (isnan(rawRoll) || isnan(rawPitch) || isnan(rawYaw)) {
                 mpu.resetFIFO();
@@ -120,9 +237,9 @@ void SensorMPU::update() {
                 return;
             }
 
-            currentData.yaw = rawYaw - yawOffset;
+            currentData.yaw   = rawYaw   - yawOffset;
             currentData.pitch = rawPitch - pitchOffset;
-            currentData.roll = rawRoll - rollOffset;
+            currentData.roll  = rawRoll  - rollOffset;
 
             // Convert gyro to deg/sec (131 LSB/deg/s) and accel to g (16384 LSB/g)
             currentData.gyroX = gx / 131.0f;
@@ -134,7 +251,11 @@ void SensorMPU::update() {
             currentData.accelZ = az / 16384.0f;
 
             currentData.dataUpdated = true;
-            currentData.timestamp = millis();
+            currentData.timestamp   = millis();
+
+            // Successful read — reset all error counters
+            lastSuccessMs = millis();
+            overflowCount = 0;
         }
     }
 }
@@ -143,7 +264,7 @@ bool SensorMPU::recalibrate() {
     if (!dmpReady) return false;
 
     Serial.println("[SensorMPU] Performing on-the-fly recalibration...");
-    
+
     mpuInterrupt = false;
     mpu.resetFIFO();
 
@@ -159,7 +280,7 @@ bool SensorMPU::recalibrate() {
         mpu.resetFIFO();
         return false;
     }
-    
+
     Quaternion tempQ;
     VectorFloat tempGravity;
     float tempYPR[3];
@@ -172,14 +293,15 @@ bool SensorMPU::recalibrate() {
         return false;
     }
 
-    yawOffset = tempYPR[0] * 180.0f / M_PI;
+    yawOffset   = tempYPR[0] * 180.0f / M_PI;
     pitchOffset = tempYPR[1] * 180.0f / M_PI;
-    rollOffset = tempYPR[2] * 180.0f / M_PI;
+    rollOffset  = tempYPR[2] * 180.0f / M_PI;
 
     mpu.resetFIFO();
     mpuInterrupt = false;
-    fifoCount = 0;
-    Serial.printf("[SensorMPU] Recalibration complete! New offsets: Y=%.2f, P=%.2f, R=%.2f\n", yawOffset, pitchOffset, rollOffset);
+    fifoCount    = 0;
+    Serial.printf("[SensorMPU] Recalibration complete! New offsets: Y=%.2f, P=%.2f, R=%.2f\n",
+                  yawOffset, pitchOffset, rollOffset);
     return true;
 }
 
