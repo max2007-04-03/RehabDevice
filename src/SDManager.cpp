@@ -34,8 +34,8 @@ bool SDManager::init(uint8_t csPin) {
     
     // SD cards on breadboards can fail to respond to CMD0 right after power-on.
     // Give the card 300 ms to stabilise, then retry at lower SPI speeds if needed.
-    // Sequence: 20 MHz → 1 MHz, 300 ms apart.
-    static const uint32_t speeds[] = {20, 1};
+    // Sequence: 4 MHz → 1 MHz, 300 ms apart.
+    static const uint32_t speeds[] = {4, 1};
     bool mounted = false;
     for (int attempt = 0; attempt < 2; attempt++) {
         delay(300);
