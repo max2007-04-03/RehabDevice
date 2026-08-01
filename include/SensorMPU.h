@@ -46,9 +46,8 @@ private:
     VectorFloat gravity;
     float ypr[3];
 
-    float pitchOffset;
-    float rollOffset;
-    float yawOffset;
+    Quaternion qCalibInv;   // Conjugate of calibration quaternion
+    bool calibrated;        // Whether calibration offset has been captured
 
     MPUData currentData;
 

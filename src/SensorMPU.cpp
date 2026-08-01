@@ -7,8 +7,9 @@ void IRAM_ATTR SensorMPU::dmpDataReadyISR() {
 }
 
 SensorMPU::SensorMPU() : dmpReady(false), mpuIntStatus(0), devStatus(0), packetSize(0), fifoCount(0),
-                         pitchOffset(0.0f), rollOffset(0.0f), yawOffset(0.0f),
+                         calibrated(false),
                          lastSuccessMs(0), lastRecoveryMs(0), lastOverflowMs(0), overflowCount(0) {
+    qCalibInv.w = 1.0f; qCalibInv.x = 0.0f; qCalibInv.y = 0.0f; qCalibInv.z = 0.0f;
     memset(&currentData, 0, sizeof(currentData));
 }
 
@@ -221,8 +222,20 @@ void SensorMPU::update() {
                 return;
             }
 
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+            // Apply quaternion calibration: q_corrected = q_calibInv * q_raw
+            // This correctly removes the initial orientation without yaw-drift coupling
+            Quaternion qCorrected;
+            if (calibrated) {
+                qCorrected.w = qCalibInv.w * q.w - qCalibInv.x * q.x - qCalibInv.y * q.y - qCalibInv.z * q.z;
+                qCorrected.x = qCalibInv.w * q.x + qCalibInv.x * q.w + qCalibInv.y * q.z - qCalibInv.z * q.y;
+                qCorrected.y = qCalibInv.w * q.y - qCalibInv.x * q.z + qCalibInv.y * q.w + qCalibInv.z * q.x;
+                qCorrected.z = qCalibInv.w * q.z + qCalibInv.x * q.y - qCalibInv.y * q.x + qCalibInv.z * q.w;
+            } else {
+                qCorrected = q;
+            }
+
+            mpu.dmpGetGravity(&gravity, &qCorrected);
+            mpu.dmpGetYawPitchRoll(ypr, &qCorrected, &gravity);
 
             int16_t gx, gy, gz, ax, ay, az;
             mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
@@ -237,9 +250,9 @@ void SensorMPU::update() {
                 return;
             }
 
-            currentData.yaw   = rawYaw   - yawOffset;
-            currentData.pitch = rawPitch - pitchOffset;
-            currentData.roll  = rawRoll  - rollOffset;
+            currentData.yaw   = rawYaw;
+            currentData.pitch = rawPitch;
+            currentData.roll  = rawRoll;
 
             // Convert gyro to deg/sec (131 LSB/deg/s) and accel to g (16384 LSB/g)
             currentData.gyroX = gx / 131.0f;
@@ -293,15 +306,19 @@ bool SensorMPU::recalibrate() {
         return false;
     }
 
-    yawOffset   = tempYPR[0] * 180.0f / M_PI;
-    pitchOffset = tempYPR[1] * 180.0f / M_PI;
-    rollOffset  = tempYPR[2] * 180.0f / M_PI;
+    // Store the conjugate (inverse) of the current quaternion for future correction.
+    // For a unit quaternion, the conjugate is: (w, -x, -y, -z)
+    qCalibInv.w =  tempQ.w;
+    qCalibInv.x = -tempQ.x;
+    qCalibInv.y = -tempQ.y;
+    qCalibInv.z = -tempQ.z;
+    calibrated = true;
 
     mpu.resetFIFO();
     mpuInterrupt = false;
     fifoCount    = 0;
-    Serial.printf("[SensorMPU] Recalibration complete! New offsets: Y=%.2f, P=%.2f, R=%.2f\n",
-                  yawOffset, pitchOffset, rollOffset);
+    Serial.printf("[SensorMPU] Recalibration complete! Calibration quaternion stored: w=%.4f, x=%.4f, y=%.4f, z=%.4f\n", 
+                  tempQ.w, tempQ.x, tempQ.y, tempQ.z);
     return true;
 }
 
