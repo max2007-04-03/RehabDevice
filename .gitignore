@@ -19,3 +19,7 @@ RehabDevice_Documentation.docx
 # Compiled files
 *.bin
 *.elf
+
+# Build temp directories
+data_gz/
+data_src_temp/

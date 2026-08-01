@@ -1,7 +1,7 @@
 #include <Arduino.h>
+#include <LittleFS.h>
 #include "Config.h"
 #include "SensorMPU.h"
-#include "SDManager.h"
 #include "AnalyticsEngine.h"
 #include "WiFiManagerModule.h"
 #include "WebServerModule.h"
@@ -23,9 +23,17 @@ void setup() {
     Serial.println("  RehabDevice — Wrist Rehabilitation Monitoring System (ESP32)");
     Serial.println("====================================================================");
 
-    // 1. Initialize SD card and FreeRTOS tasks
-    if (!SDManager::init(5)) {
-        Serial.println("[Setup] Error: Failed to initialize SDManager!");
+    // 1. SD card removed.
+    // 1.5 Initialize LittleFS for web UI
+    if (!LittleFS.begin()) {
+        Serial.println("[Setup] Error: Failed to mount LittleFS! Attempting to format...");
+        if (LittleFS.begin(true)) {
+            Serial.println("[Setup] LittleFS formatted and mounted successfully.");
+        } else {
+            Serial.println("[Setup] CRITICAL Error: LittleFS mount failed completely.");
+        }
+    } else {
+        Serial.println("[Setup] LittleFS mounted successfully.");
     }
 
     // 2. Initialize MPU6050 gyroscope/accelerometer (DMP + INT interrupts)

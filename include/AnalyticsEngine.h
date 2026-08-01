@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <sys/time.h>
 #include "SensorMPU.h"
-#include "SDManager.h"
 #include "Config.h"
 
 // Current state of the adaptive extreme points detector
@@ -13,6 +12,20 @@ enum HysteresisState {
     STATE_SEARCHING_MAX,
     STATE_SEARCHING_MIN
 };
+
+struct SessionRecord {
+    String patientId;
+    unsigned long timestamp;
+    String dateStr;
+    float minAngle;
+    float maxAngle;
+    float amplitude;
+    float avgSpeed;
+    float smoothness;
+    int flexionsCount;
+    float holdingTime;
+};
+
 
 class AnalyticsEngine {
 public:

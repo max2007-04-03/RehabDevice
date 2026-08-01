@@ -16,6 +16,7 @@ let currentPatientName = "";
 let currentAppMode = 'monitor'; 
 let allSessionsData = [];
 let streamedSessionsBuffer = []; 
+let globalSdAvailable = true;
 
 // Game Engine (Dependency Injection Container)
 const engine = {
@@ -304,14 +305,25 @@ function handleServerMessage(data) {
             valElem.textContent = data.angle.toFixed(1);
         }
     } else if (data.type === "status") {
-        // Update LittleFS storage usage indicator
+        globalSdAvailable = data.sdAvailable !== false;
+        
+        // Update storage usage indicator
         const used = data.usedBytes || 0;
         const total = data.totalBytes || 1;
         const percent = Math.min(100, Math.round((used / total) * 100));
         
-        document.getElementById("memoryBar").style.width = `${percent}%`;
-        document.getElementById("memoryText").textContent = 
-            `${Math.round(used / 1024)} / ${Math.round(total / 1024)} КБ (${100 - percent}% вільно)`;
+        const memoryText = document.getElementById("memoryText");
+        if (memoryText) {
+            if (!globalSdAvailable) {
+                document.getElementById("memoryBar").style.width = `0%`;
+                memoryText.textContent = "⚠️ SD-карта відсутня (історія не зберігається)";
+                memoryText.style.color = "#ff4c4c";
+            } else {
+                document.getElementById("memoryBar").style.width = `${percent}%`;
+                memoryText.textContent = `${Math.round(used / 1024)} / ${Math.round(total / 1024)} КБ (${100 - percent}% вільно)`;
+                memoryText.style.color = "";
+            }
+        }
 
         // Synchronize authorization state in case of page refresh
         if (data.sessionActive) {
@@ -389,6 +401,11 @@ function setupEventListeners() {
             alert("Будь ласка, введіть ПІБ пацієнта для початку сесії.");
             return;
         }
+        
+        if (!globalSdAvailable) {
+            alert("⚠️ УВАГА: SD-карта відсутня. Ви можете проводити тренування та грати, але історія цієї сесії не буде збережена у довгостроковий архів.");
+        }
+        
         sendCommand("startSession", { patientId: name });
         isAuthorized = true;
         currentPatientName = name;
@@ -527,6 +544,7 @@ function showGuestUI() {
     document.getElementById("liveStatsPanel").style.display = "none";
     document.getElementById("patientIdInput").value = "";
 }
+
 
 // Initialize Chart.js configuration
 function initChart() {

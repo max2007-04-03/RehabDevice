@@ -44,8 +44,7 @@ bool AnalyticsEngine::stopSession() {
 
     Serial.printf("[AnalyticsEngine] Session stopped. Flexions: %d, Smoothness: %.1f%%, Holding: %.1f s\n", 
                   record.flexionsCount, record.smoothness, record.holdingTime);
-
-    return SDManager::saveSessionSummary(record);
+    return true;
 }
 
 void AnalyticsEngine::processData(const MPUData& data) {

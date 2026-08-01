@@ -36,7 +36,7 @@
 // Minimum angle change to trigger start/end of a flexion (hysteresis threshold)
 #define ANALYTICS_HYSTERESIS_DEG          4.0f
 // Angular acceleration threshold (d^2(theta)/dt^2) in deg/s^2 for tremor and jerk detection
-#define ANALYTICS_TREMOR_JERK_THRESHOLD   180.0f
+#define ANALYTICS_TREMOR_JERK_THRESHOLD   300.0f
 // Tolerable deviation from peak angle for holding time calculation
 #define ANALYTICS_HOLD_TOLERANCE_DEG      3.5f
 // Maximum angular velocity (deg/s) below which wrist is considered holding at extreme point

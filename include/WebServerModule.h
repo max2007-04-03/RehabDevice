@@ -8,7 +8,6 @@
 #include <sys/time.h>
 #include "Config.h"
 #include "SensorMPU.h"
-#include "SDManager.h"
 #include "AnalyticsEngine.h"
 #include "WiFiManagerModule.h"
 
@@ -28,8 +27,6 @@ public:
     // Broadcast live training statistics for current session
     void broadcastLiveStats();
     
-    // Send patient sessions list chunk by chunk to avoid RAM exhaustion
-    void sendSessionsList(AsyncWebSocketClient* client = nullptr);
 
     // Regular update called from loop() to process non-blocking chunked streaming on Core 1
     void update();
@@ -52,13 +49,7 @@ private:
     unsigned long lastStatsBroadcastMs;
     unsigned long lastCleanupMs;
 
-    struct StreamState {
-        bool active = false;
-        uint32_t clientId = 0;
-        size_t currentPatientIdx = 0;
-        bool headerSent = false;
-    };
-    StreamState streamState;
+
     uint32_t sendInitialStatusClientId;
 
     void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type,
@@ -67,6 +58,7 @@ private:
     // Defer session state changes to main loop (Core 1) to avoid blocking AsyncTCP
     bool pendingStartSession = false;
     bool pendingStopSession = false;
+    bool pendingRecalibrate = false;
     String pendingPatientId = "";
 
     void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, size_t len);
