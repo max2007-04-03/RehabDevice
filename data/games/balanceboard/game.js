@@ -132,25 +132,25 @@ window.RehabGames['balanceboard'] = class BalanceBoardGame {
     _setDifficultyParams() {
         switch (this.difficulty) {
             case 'easy':
-                this.waveAmplitude = 8;
-                this.waveFrequency = 0.3;
-                this.FALL_THRESHOLD = 42;
+                this.waveAmplitude = 10;
+                this.waveFrequency = 0.4;
+                this.FALL_THRESHOLD = 35;
                 break;
             case 'medium':
-                this.waveAmplitude = 15;
-                this.waveFrequency = 0.5;
-                this.FALL_THRESHOLD = 38;
+                this.waveAmplitude = 18;
+                this.waveFrequency = 0.6;
+                this.FALL_THRESHOLD = 28;
                 break;
             case 'hard':
-                this.waveAmplitude = 25;
-                this.waveFrequency = 0.7;
-                this.FALL_THRESHOLD = 35;
+                this.waveAmplitude = 30;
+                this.waveFrequency = 0.85;
+                this.FALL_THRESHOLD = 22;
                 break;
             case 'auto':
             default:
-                this.waveAmplitude = 6;
-                this.waveFrequency = 0.3;
-                this.FALL_THRESHOLD = 42;
+                this.waveAmplitude = 10;
+                this.waveFrequency = 0.4;
+                this.FALL_THRESHOLD = 32;
                 break;
         }
     }
@@ -245,9 +245,10 @@ window.RehabGames['balanceboard'] = class BalanceBoardGame {
 
         // Increase difficulty over time
         if (this.difficulty === 'auto') {
-            this.difficultyLevel = Math.min(10, 1 + this.survivalTime / 12);
-            this.waveAmplitude = 6 + (this.difficultyLevel - 1) * 2.5;
-            this.waveFrequency = 0.3 + (this.difficultyLevel - 1) * 0.06;
+            this.difficultyLevel = Math.min(10, 1 + this.survivalTime / 10);
+            this.waveAmplitude = 10 + (this.difficultyLevel - 1) * 3.5;
+            this.waveFrequency = 0.4 + (this.difficultyLevel - 1) * 0.08;
+            this.FALL_THRESHOLD = Math.max(22, 32 - (this.difficultyLevel - 1) * 1.1);
         } else {
             this.difficultyLevel = Math.min(10, 1 + this.survivalTime / 20);
             let ampBoost = (this.difficultyLevel - 1) * 1.5;
@@ -313,10 +314,10 @@ window.RehabGames['balanceboard'] = class BalanceBoardGame {
         this.dangerPulse += dt * (3 + this.dangerLevel * 8);
 
         // Character slide along platform based on tilt
-        let slideForce = Math.sin(this.platformVisualAngle * Math.PI / 180) * 400;
+        let slideForce = Math.sin(this.platformVisualAngle * Math.PI / 180) * 600; // Increased slide physics
         this.charSlide += slideForce * dt;
-        this.charSlide *= Math.pow(0.3, dt); // Friction
-        this.charSlide = Math.max(-this.width * 0.2, Math.min(this.width * 0.2, this.charSlide));
+        this.charSlide *= Math.pow(0.5, dt); // Reduced friction for more sliding
+        this.charSlide = Math.max(-this.width * 0.25, Math.min(this.width * 0.25, this.charSlide));
 
         // Character body tilt (reacts to angle)
         let targetBodyTilt = this.effectiveAngle * 0.5;
