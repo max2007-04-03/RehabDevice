@@ -22,7 +22,7 @@
             </div>
             <div class="memory-widget">
                 <div class="memory-label">
-                    <span>Пам'ять (LittleFS)</span>
+                    <span id="memoryTypeLabel">Пам'ять (LittleFS)</span>
                     <span id="memoryText">---</span>
                 </div>
                 <div class="memory-progress">
@@ -82,16 +82,6 @@
                             </button>
                         </div>
                         
-                        <!-- Bot Difficulty Selector (Shown only in Game mode) -->
-                        <div id="botDifficultyPanel" style="display: none; flex-direction: column; gap: 0.5rem;">
-                            <label style="font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">Складність Smart Bot:</label>
-                            <select id="botDifficultySelect" class="input-field" style="padding: 0.5rem;">
-                                <option value="auto">🤖 Авто-терапія (Адаптивна)</option>
-                                <option value="easy">🟢 Легкий (Повільний)</option>
-                                <option value="medium">🟡 Середній (Стандарт)</option>
-                                <option value="hard">🔴 Складний (Швидкий)</option>
-                            </select>
-                        </div>
 
                         <button class="btn btn-danger" id="btnStopSession">⏹️ Завершити сесію та зберегти</button>
                     </div>
@@ -180,8 +170,8 @@
                         <span class="metric-val" id="statFlex" style="color: var(--accent-orange);">0</span>
                     </div>
                     <div class="metric-box">
-                        <span class="metric-title">Час утримання в краях</span>
-                        <span class="metric-val" id="statHold">0.0 с</span>
+                        <span class="metric-title">Тривалість сесії</span>
+                        <span class="metric-val" id="statDuration">0.0 с</span>
                     </div>
                 </div>
             </div>

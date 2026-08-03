@@ -23,7 +23,7 @@ struct SessionRecord {
     float avgSpeed;
     float smoothness;
     int flexionsCount;
-    float holdingTime;
+    float sessionDuration;
 };
 
 
@@ -77,9 +77,6 @@ private:
     HysteresisState hystState;
     float localExtremeAngle;
     int flexionsCount;
-    
-    // Holding time at extreme angles
-    float totalHoldingTimeSec;
     
     // Helper method to get formatted date/time string
     String getFormattedDateTime();

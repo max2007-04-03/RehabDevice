@@ -23,7 +23,6 @@ const engine = {
     currentAngle: 0,
     calibMin: -20,
     calibMax: 20,
-    difficulty: 'auto',
     activeGame: null,
     animationId: null,
     lastTime: 0,
@@ -82,7 +81,7 @@ const engine = {
             const GameClass = window.RehabGames[gameId];
             engine.activeGame = new GameClass(ctx, engine.api);
             if (engine.activeGame.resize) engine.activeGame.resize(canvas.width, canvas.height);
-            engine.activeGame.init(engine.calibMin, engine.calibMax, engine.difficulty);
+            engine.activeGame.init(engine.calibMin, engine.calibMax);
             
             document.getElementById("gamePlaceholder").style.display = "none";
             document.getElementById("gameHUD").style.display = "flex";
@@ -209,14 +208,8 @@ function startHttpPolling() {
     const localUnix = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
     fetch(`${DEVICE_HOST}/api/cmd?action=syncTime&timestamp=${localUnix}`).catch(() => {});
 
-    // Load initial sessions list
-    fetch(`${DEVICE_HOST}/api/sessions`)
-        .then(r => r.json())
-        .then(data => {
-            allSessionsData = data || [];
-            renderPatientPills(allSessionsData);
-            updateDoctorDashboardView();
-        }).catch(() => {});
+    // Load all sessions via pagination
+    fetchAllSessionsPaginated();
 
     // Periodic status polling (every 2 seconds)
     pollTimer = setInterval(pollOnce, 2000);
@@ -259,16 +252,16 @@ function initWebSocket() {
 
         const localUnix = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
         sendCommand("syncTime", { timestamp: localUnix });
-        sendCommand("getSessions");
+        fetchAllSessionsPaginated();
     };
 
     ws.onerror = () => {};
 
     ws.onclose = () => {
-        if (usePolling) return;
+        usePolling = true;
         document.getElementById("statusDot").classList.remove("connected");
         document.getElementById("statusText").textContent = "Відключено (перепідключення...)";
-        
+        ws = null;
         if (!reconnectInterval) {
             reconnectInterval = setInterval(() => {
                 initWebSocket();
@@ -282,6 +275,41 @@ function initWebSocket() {
             handleServerMessage(data);
         } catch (e) {}
     };
+}
+
+let wsSessionsOffset = 0;
+let wsSessionsBuffer = [];
+
+async function fetchAllSessionsPaginated() {
+    if (!usePolling && ws && ws.readyState === WebSocket.OPEN) {
+        // Use WebSocket to avoid creating new TCP connections (PCB exhaustion)
+        // Request in small chunks to prevent ESP32 RAM crash (std::bad_alloc)
+        wsSessionsOffset = 0;
+        wsSessionsBuffer = [];
+        sendCommand("getSessions", { limit: 50, offset: wsSessionsOffset });
+        return;
+    }
+
+    // Fallback for HTTP mode
+    let all = [];
+    let offset = 0;
+    const limit = 50;
+    try {
+        while (true) {
+            let res = await fetch(`${DEVICE_HOST}/api/sessions?offset=${offset}&limit=${limit}`, {
+                headers: { 'Connection': 'keep-alive' }
+            });
+            if (!res.ok) break;
+            let data = await res.json();
+            if (!Array.isArray(data)) break;
+            all = all.concat(data);
+            if (data.length < limit) break;
+            offset += limit;
+        }
+        handleServerMessage({ type: "sessionsList", sessions: all });
+    } catch (e) {
+        console.error("Error fetching sessions:", e);
+    }
 }
 
 // Process incoming telemetry and status messages from ESP32
@@ -313,16 +341,15 @@ function handleServerMessage(data) {
         const percent = Math.min(100, Math.round((used / total) * 100));
         
         const memoryText = document.getElementById("memoryText");
+        const memoryLabel = document.getElementById("memoryTypeLabel");
+        
+        if (memoryLabel) {
+            memoryLabel.textContent = globalSdAvailable ? "Пам'ять (SD-карта)" : "Пам'ять (LittleFS)";
+        }
         if (memoryText) {
-            if (!globalSdAvailable) {
-                document.getElementById("memoryBar").style.width = `0%`;
-                memoryText.textContent = "⚠️ SD-карта відсутня (історія не зберігається)";
-                memoryText.style.color = "#ff4c4c";
-            } else {
-                document.getElementById("memoryBar").style.width = `${percent}%`;
-                memoryText.textContent = `${Math.round(used / 1024)} / ${Math.round(total / 1024)} КБ (${100 - percent}% вільно)`;
-                memoryText.style.color = "";
-            }
+            document.getElementById("memoryBar").style.width = globalSdAvailable ? '100%' : '50%';
+            memoryText.textContent = "База даних активна";
+            memoryText.style.color = "";
         }
 
         // Synchronize authorization state in case of page refresh
@@ -342,11 +369,30 @@ function handleServerMessage(data) {
         document.getElementById("statSpeed").textContent = `${data.avgSpeed.toFixed(1)}°/с`;
         document.getElementById("statSmooth").textContent = `${data.smoothness.toFixed(0)}%`;
         document.getElementById("statFlex").textContent = `${data.flexionsCount}`;
-        document.getElementById("statHold").textContent = `${data.holdingTime.toFixed(1)} с`;
+        document.getElementById("statDuration").textContent = `${data.sessionDuration.toFixed(1)} с`;
     } else if (data.type === "sessionsList") {
-        allSessionsData = data.sessions || data || [];
-        renderPatientPills(allSessionsData);
-        updateDoctorDashboardView();
+        const chunk = data.sessions || [];
+        
+        if (!usePolling && ws && ws.readyState === WebSocket.OPEN && wsSessionsBuffer !== null) {
+            // We are using WebSocket pagination
+            wsSessionsBuffer = wsSessionsBuffer.concat(chunk);
+            if (chunk.length === 50) {
+                // There might be more data, request next chunk
+                wsSessionsOffset += 50;
+                sendCommand("getSessions", { limit: 50, offset: wsSessionsOffset });
+            } else {
+                // Done fetching all chunks
+                allSessionsData = wsSessionsBuffer;
+                wsSessionsBuffer = null; // free memory reference
+                renderPatientPills(allSessionsData);
+                updateDoctorDashboardView();
+            }
+        } else {
+            // HTTP fallback mode
+            allSessionsData = chunk;
+            renderPatientPills(allSessionsData);
+            updateDoctorDashboardView();
+        }
     } else if (data.type === "sessionsStreamStart") {
         // Start receiving chunked session stream (zero-copy streaming)
         streamedSessionsBuffer = [];
@@ -522,12 +568,6 @@ function setupEventListeners() {
         });
     }
 
-    const botDifficultySelect = document.getElementById("botDifficultySelect");
-    if (botDifficultySelect) {
-        botDifficultySelect.addEventListener("change", (e) => {
-            engine.difficulty = e.target.value;
-        });
-    }
 }
 
 // Switch between Guest UI and Authorized Patient UI
@@ -1003,7 +1043,7 @@ function downloadFilteredCSV() {
 
     filtered.forEach(rec => {
         const cleanName = (rec.patientId || "Пацієнт").replace(/,/g, " ");
-        csv += `${cleanName},${(rec.minAngle || 0).toFixed(2)},${(rec.maxAngle || 0).toFixed(2)},${(rec.amplitude || 0).toFixed(2)},${(rec.avgSpeed || 0).toFixed(2)},${(rec.smoothness || 0).toFixed(2)},${rec.flexionsCount || 0},${(rec.holdingTime || 0).toFixed(2)}\r\n`;
+        csv += `${cleanName},${(rec.minAngle || 0).toFixed(2)},${(rec.maxAngle || 0).toFixed(2)},${(rec.amplitude || 0).toFixed(2)},${(rec.avgSpeed || 0).toFixed(2)},${(rec.smoothness || 0).toFixed(2)},${rec.flexionsCount || 0},${(rec.sessionDuration || 0).toFixed(2)}\r\n`;
     });
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -1016,65 +1056,31 @@ function downloadFilteredCSV() {
     document.body.removeChild(link);
 }
 
-// Download and parse binary file to detailed CSV
-async function downloadDetailedBinary(patientId, timestamp) {
+// Download CSV for a specific single session
+function downloadDetailedBinary(patientId, timestamp) {
     if (!patientId) return;
     
-    // UI Feedback
-    const btnId = `btn_download_${timestamp}`;
+    // Find the specific session
+    const session = allSessionsData.find(s => s.patientId === patientId && String(s.timestamp) === String(timestamp));
     
-    try {
-        const response = await fetch(`${DEVICE_HOST}/api/download_bin?id=${encodeURIComponent(patientId)}`);
-        if (!response.ok) {
-            alert("Помилка завантаження файлу. Можливо він був видалений.");
-            return;
-        }
-        
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength === 0) {
-            alert("Файл порожній.");
-            return;
-        }
-        
-        const view = new DataView(buffer);
-        const recordCount = buffer.byteLength / 32; // 32 bytes per LogItem
-        
-        let csv = "\uFEFFЧас (мс),Кут (град),Швидкість (град/с),Статус\r\n";
-        
-        for (let i = 0; i < recordCount; i++) {
-            const offset = i * 32;
-            const timeMs = view.getUint32(offset, true);
-            const roll = (view.getInt16(offset + 10, true) / 131.0); // Rough approximation for gyro/accel to angle if it was stored as raw, but we store roll?
-            // Actually, wait, LogItem struct:
-            // uint32 timestamp, int16 accel[3], int16 gyro[3], uint16 status, reserved[14]
-            // We'll just export raw accel/gyro
-            const ax = view.getInt16(offset + 4, true);
-            const ay = view.getInt16(offset + 6, true);
-            const az = view.getInt16(offset + 8, true);
-            const gx = view.getInt16(offset + 10, true);
-            const gy = view.getInt16(offset + 12, true);
-            const gz = view.getInt16(offset + 14, true);
-            const status = view.getUint16(offset + 16, true);
-            
-            csv += `${timeMs},${ax},${ay},${az},${gx},${gy},${gz},${status}\r\n`;
-        }
-        
-        // Let's modify the CSV header to match the struct fields perfectly
-        let correctCsv = "\uFEFFTimestamp(ms),Accel_X,Accel_Y,Accel_Z,Gyro_X,Gyro_Y,Gyro_Z,Status\r\n";
-        correctCsv += csv.substring(csv.indexOf('\n') + 1);
-        
-        const blob = new Blob([correctCsv], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", `Detailed_${patientId}_${timestamp}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-    } catch (e) {
-        alert("Помилка мережі при завантаженні детального графіка.");
+    if (!session) {
+        alert("Помилка: Дані цієї сесії не знайдені в пам'яті.");
+        return;
     }
+
+    let csv = "\uFEFFІм'я Пацієнта,Мінімальний кут (град),Максимальний кут (град),Амплітуда (град),Середня швидкість (град/с),Плавність (%),Кількість згинань,Час (с)\r\n";
+    
+    const cleanName = (session.patientId || "Пацієнт").replace(/,/g, " ");
+    csv += `${cleanName},${(session.minAngle || 0).toFixed(2)},${(session.maxAngle || 0).toFixed(2)},${(session.amplitude || 0).toFixed(2)},${(session.avgSpeed || 0).toFixed(2)},${(session.smoothness || 0).toFixed(2)},${session.flexionsCount || 0},${(session.sessionDuration || 0).toFixed(2)}\r\n`;
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `Session_${cleanName.replace(/\s+/g, "_")}_${timestamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 }
 
 // Custom confirmation modal implementation (compatible with iOS and Android Captive Portal)

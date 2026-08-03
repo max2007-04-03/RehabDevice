@@ -1,5 +1,6 @@
 #include "WebServerModule.h"
 #include <LittleFS.h>
+#include "DatabaseManager.h"
 
 // Fallback embedded HTML interface
 static const char FALLBACK_HTML[] = R"rawliteral(
@@ -46,14 +47,16 @@ void WebServerModule::setupRoutes() {
         char buf[256];
         snprintf(buf, sizeof(buf),
                  "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,"
-                 "\"sessionActive\":%s,\"patientId\":\"%s\",\"angle\":%.2f,\"sdAvailable\":false}",
+                 "\"sessionActive\":%s,\"patientId\":\"%s\",\"angle\":%.2f,\"sdAvailable\":%s}",
                  wifi->getConnectedClientsCount(),
-                 active ? "true" : "false", rec.patientId.c_str(), mpu.roll);
+                 active ? "true" : "false", rec.patientId.c_str(), mpu.roll, dbManager.isSDAvailable() ? "true" : "false");
         request->send(200, "application/json", buf);
     });
 
     server.on("/api/sessions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(200, "application/json", "[]");
+        int limit = request->hasArg("limit") ? request->arg("limit").toInt() : 50;
+        int offset = request->hasArg("offset") ? request->arg("offset").toInt() : 0;
+        request->send(200, "application/json", dbManager.getSessionsJson(limit, offset));
     });
 
     server.on("/api/cmd", HTTP_GET, [this](AsyncWebServerRequest *request) {
@@ -135,7 +138,10 @@ void WebServerModule::handleWebSocketMessage(AsyncWebSocketClient* client, uint8
     } else if (cmd == "recalibrate") {
         pendingRecalibrate = true;
     } else if (cmd == "getSessions") {
-        client->text("{\"type\":\"sessions_list\",\"sessions\":[]}");
+        int limit = doc["limit"].is<int>() ? doc["limit"].as<int>() : 50;
+        int offset = doc["offset"].is<int>() ? doc["offset"].as<int>() : 0;
+        String sessionsJson = dbManager.getSessionsJson(limit, offset);
+        client->text("{\"type\":\"sessionsList\",\"sessions\":" + sessionsJson + "}");
     }
 }
 
@@ -156,8 +162,8 @@ void WebServerModule::broadcastStatus() {
     SessionRecord rec = analytics->getCurrentRecord();
     char buf[256];
     snprintf(buf, sizeof(buf),
-             "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,\"sessionActive\":%s,\"patientId\":\"%s\",\"sdAvailable\":false}",
-             wifi->getConnectedClientsCount(), active ? "true" : "false", rec.patientId.c_str());
+             "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,\"sessionActive\":%s,\"patientId\":\"%s\",\"sdAvailable\":%s}",
+             wifi->getConnectedClientsCount(), active ? "true" : "false", rec.patientId.c_str(), dbManager.isSDAvailable() ? "true" : "false");
     ws.textAll(buf);
 }
 
@@ -179,7 +185,9 @@ void WebServerModule::update() {
         pendingStartSession = false;
     }
     if (pendingStopSession) {
+        SessionRecord rec = analytics->getCurrentRecord();
         analytics->stopSession();
+        dbManager.saveSession(rec);
         broadcastStatus();
         pendingStopSession = false;
     }
@@ -205,8 +213,8 @@ void WebServerModule::sendStatusToClient(AsyncWebSocketClient* client) {
     SessionRecord rec = analytics->getCurrentRecord();
     char buf[256];
     snprintf(buf, sizeof(buf),
-             "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,\"sessionActive\":%s,\"patientId\":\"%s\",\"sdAvailable\":false}",
-             wifi->getConnectedClientsCount(), active ? "true" : "false", rec.patientId.c_str());
+             "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,\"sessionActive\":%s,\"patientId\":\"%s\",\"sdAvailable\":%s}",
+             wifi->getConnectedClientsCount(), active ? "true" : "false", rec.patientId.c_str(), dbManager.isSDAvailable() ? "true" : "false");
     client->text(buf);
 }
 

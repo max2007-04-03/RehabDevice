@@ -5,6 +5,8 @@
 #include "AnalyticsEngine.h"
 #include "WiFiManagerModule.h"
 #include "WebServerModule.h"
+#include "DatabaseManager.h"
+#include "SDManager.h"
 
 // Global firmware module instances
 SensorMPU sensor;
@@ -34,6 +36,14 @@ void setup() {
         }
     } else {
         Serial.println("[Setup] LittleFS mounted successfully.");
+    }
+
+    // Initialize SD Card
+    sdManager.init();
+
+    // Initialize Database (SQLite)
+    if (!dbManager.init(sdManager.isAvailable())) {
+        Serial.println("[Setup] Error: Failed to initialize DatabaseManager!");
     }
 
     // 2. Initialize MPU6050 gyroscope/accelerometer (DMP + INT interrupts)

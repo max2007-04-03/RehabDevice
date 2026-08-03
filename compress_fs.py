@@ -5,44 +5,42 @@ import gzip
 
 project_dir = env.subst("$PROJECT_DIR")
 data_dir = os.path.join(project_dir, "data")
-data_src_dir = os.path.join(project_dir, "data_src_temp")
+build_dir = env.subst("$BUILD_DIR")
+compressed_data_dir = os.path.join(build_dir, "data_compressed")
+
+# Tell PlatformIO to use the compressed directory for LittleFS
+env.Replace(PROJECT_DATA_DIR=compressed_data_dir)
 
 def before_buildfs(source, target, env):
-    print("\n[Auto-GZIP] Temporarily replacing 'data' with compressed files...")
+    print("\n[Auto-GZIP] Preparing compressed data directory...")
     
-    # 1. Rename original 'data' to 'data_src_temp'
-    if os.path.exists(data_dir):
-        os.rename(data_dir, data_src_dir)
+    if os.path.exists(compressed_data_dir):
+        shutil.rmtree(compressed_data_dir)
+    os.makedirs(compressed_data_dir)
     
-    # 2. Create a new 'data' folder for mklittlefs
-    os.makedirs(data_dir)
-    
-    for root, dirs, files in os.walk(data_src_dir):
+    for root, dirs, files in os.walk(data_dir):
         for file in files:
-            file_path = os.path.join(root, file)
-            rel_path = os.path.relpath(file_path, data_src_dir)
+            orig_path = os.path.join(root, file)
+            rel_path = os.path.relpath(orig_path, data_dir)
             
-            if file.endswith((".html", ".css", ".js", ".json", ".svg", ".txt")):
-                dest_path = os.path.join(data_dir, rel_path + ".gz")
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                with open(file_path, "rb") as f_in, gzip.open(dest_path, "wb") as f_out:
+            is_compressible = file.endswith((".html", ".css", ".js", ".json", ".svg", ".txt"))
+            dest_rel = rel_path + ".gz" if is_compressible else rel_path
+            dest_path = os.path.join(compressed_data_dir, dest_rel)
+            
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            
+            if is_compressible:
+                with open(orig_path, "rb") as f_in, gzip.open(dest_path, "wb") as f_out:
                     shutil.copyfileobj(f_in, f_out)
             else:
-                dest_path = os.path.join(data_dir, rel_path)
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                shutil.copy2(file_path, dest_path)
-
-def after_buildfs(source, target, env):
-    print("\n[Auto-GZIP] Restoring original 'data' directory...")
-    # 1. Remove the temporary compressed 'data' folder
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
-    
-    # 2. Rename 'data_src_temp' back to 'data'
-    if os.path.exists(data_src_dir):
-        os.rename(data_src_dir, data_dir)
-    print("[Auto-GZIP] Restoration complete.\n")
+                shutil.copy2(orig_path, dest_path)
+                
+    print("[Auto-GZIP] Compression complete.\n")
 
 # Hook into the LittleFS build process
 env.AddPreAction("$BUILD_DIR/littlefs.bin", before_buildfs)
-env.AddPostAction("$BUILD_DIR/littlefs.bin", after_buildfs)
+
+# Tell SCons that littlefs.bin depends on the original data directory.
+# This ensures that changing a file in 'data' will trigger the buildfs target
+# and execute our before_buildfs script automatically, without needing 'pio clean'.
+env.Depends("$BUILD_DIR/littlefs.bin", data_dir)
