@@ -1,11 +1,9 @@
 // Global variables
+alert("DEBUG: app.js loaded!");
 
-// Always use the fixed AP IP for all network requests.
-// window.location.host is unreliable in iOS captive portal mode:
-// Apple's CNA browser spoofs the host as e.g. "netcts.cdn-apple.com",
-// which causes WebSocket and fetch() to connect to the wrong server.
-const DEVICE_HOST = "http://192.168.4.1";
-const DEVICE_WS   = "ws://192.168.4.1/ws";
+// Device API configuration
+const DEVICE_HOST = window.location.protocol + "//" + window.location.host;
+const DEVICE_WS   = "ws://" + window.location.host + "/ws";
 
 let ws = null;
 let doctorChart = null;
@@ -237,6 +235,7 @@ function initWebSocket() {
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
+        alert("DEBUG: WebSocket opened!");
         usePolling = false;
         document.getElementById("statusDot").classList.add("connected");
         document.getElementById("statusText").textContent = "Пристрій підключено";
