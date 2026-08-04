@@ -36,7 +36,7 @@ void WebServerModule::init() {
     });
     server.addHandler(&ws);
     setupRoutes();
-    ElegantOTA.begin(&server);
+    // ElegantOTA.begin(&server); // Temporarily disabled for debugging
     server.begin();
     Serial.println("[WebServer] HTTP Server started successfully on port 80!");
 }
@@ -52,6 +52,8 @@ void WebServerModule::setupRoutes() {
                  "\"sessionActive\":%s,\"patientId\":\"%s\",\"angle\":%.2f,\"sdAvailable\":%s}",
                  wifi->getConnectedClientsCount(),
                  active ? "true" : "false", rec.patientId.c_str(), mpu.roll, dbManager.isSDAvailable() ? "true" : "false");
+                 
+        Serial.printf("[WebServer] /api/status requested. Free heap: %u\n", ESP.getFreeHeap());
         request->send(200, "application/json", buf);
     });
 
@@ -120,7 +122,10 @@ void WebServerModule::setupRoutes() {
 
 void WebServerModule::onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
     if (type == WS_EVT_CONNECT) {
+        Serial.printf("[WebServer] WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
         sendInitialStatusClientId = client->id();
+    } else if (type == WS_EVT_DISCONNECT) {
+        Serial.printf("[WebServer] WebSocket client #%u disconnected\n", client->id());
     } else if (type == WS_EVT_DATA) {
         handleWebSocketMessage(client, data, len);
     }
@@ -186,7 +191,7 @@ void WebServerModule::broadcastLiveStats() {
 }
 
 void WebServerModule::update() {
-    ElegantOTA.loop();
+    // ElegantOTA.loop(); // Temporarily disabled for debugging
 
     if (pendingStartSession) {
         analytics->startSession(pendingPatientId);
