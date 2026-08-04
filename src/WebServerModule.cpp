@@ -36,7 +36,7 @@ void WebServerModule::init() {
     });
     server.addHandler(&ws);
     setupRoutes();
-    // ElegantOTA.begin(&server); // Temporarily disabled for debugging
+    ElegantOTA.begin(&server);
     server.begin();
     Serial.println("[WebServer] HTTP Server started successfully on port 80!");
 }
