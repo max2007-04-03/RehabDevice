@@ -41,6 +41,9 @@
             <button class="tab-btn" data-tab="tabDoctor">
                 <span>🩺 Інтерфейс Лікаря (Статистика)</span>
             </button>
+            <button class="tab-btn" data-tab="tabSettings">
+                <span>⚙️ Налаштування та Оновлення</span>
+            </button>
         </nav>
 
         <!-- Tab 1: Patient monitoring and real-time visualizer -->
@@ -287,111 +290,39 @@
             </div>
         </section>
 
-        <!-- Tab 2: Doctor Dashboard (Statistics) -->
-        <section class="tab-content" id="tabDoctor">
+        </section>
+
+        <!-- Tab 3: System Settings & Updates -->
+        <section class="tab-content" id="tabSettings">
             <div class="card">
-                <div class="card-header" style="flex-wrap: wrap; gap: 1rem;">
-                    <div class="card-title">🩺 Аналітичний дашборд та клінічна динаміка</div>
-                    <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-                        <input type="text" id="patientSearchInput" class="input-field" placeholder="🔍 Точне ПІБ пацієнта..." style="width: 220px; padding: 0.55rem 0.9rem; font-size: 0.88rem;">
-                        <button class="btn btn-secondary" id="btnExactSearch" style="padding: 0.55rem 1rem; font-size: 0.88rem;" title="Точний пошук пацієнта">Знайти</button>
-                        <button class="btn" id="btnDownloadCSV" style="padding: 0.55rem 1.15rem; font-size: 0.88rem;" title="Завантажити CSV таблицю">
-                            📥 Завантажити CSV (Всі)
-                        </button>
-                    </div>
+                <div class="card-header">
+                    <div class="card-title">⚙️ Системні налаштування та Оновлення (OTA)</div>
                 </div>
-
-                <!-- Interactive patient selection pills instead of dropdown -->
-                <div id="patientPillsContainer" class="patient-pills-strip" style="display: flex; gap: 0.5rem; overflow-x: auto; padding: 0.5rem 0 1.25rem 0; scrollbar-width: thin;">
-                    <button class="patient-pill active" data-patient="ALL">🧑 Всі пацієнти</button>
-                </div>
-
-                <!-- Clinical course summary for selected patient -->
-                <div id="patientSummaryContainer" class="patient-summary-box" style="display: none; margin-bottom: 1.75rem;">
-                    <div class="summary-header">
-                        <div>
-                            <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); font-weight: 600;">Резюме курсу реабілітації</span>
-                            <h3 id="summaryPatientName" style="font-size: 1.45rem; font-weight: 800; color: var(--accent-primary); margin-top: 0.15rem;">Пацієнт</h3>
+                <div style="padding: 1rem;">
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.5;">
+                        Перевіряйте та встановлюйте останні оновлення прошивки пристрою. Переконайтеся, що на вашому телефоні увімкнений мобільний інтернет (4G/LTE).
+                    </p>
+                    
+                    <div style="background: rgba(255,255,255,0.05); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <h3 style="color: #fff; margin-bottom: 1rem; font-size: 1.1rem;">Оновлення системи</h3>
+                        <div id="updateStatusInfo" style="margin-bottom: 1rem; color: #00f2fe;">Поточна версія: невідомо</div>
+                        
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary" id="btnCheckUpdates">🔄 Перевірити оновлення</button>
+                            <button class="btn" id="btnInstallUpdate" style="display: none; background: #00e676; color: #000; font-weight: bold;">📥 Встановити оновлення</button>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                            <div id="summaryProgressBadge" class="progress-badge">
-                                🔥 Прогрес: +0.0° (+0%)
+
+                        <!-- Update Progress Bar -->
+                        <div id="updateProgressContainer" style="display: none; margin-top: 1.5rem;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                <span id="updateStepText">Завантаження...</span>
+                                <span id="updatePercentText">0%</span>
                             </div>
-                            <button class="btn" id="btnDownloadClientCSV" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; background: rgba(0, 242, 254, 0.15); border-color: rgba(0, 242, 254, 0.4); color: #00f2fe;" title="Завантажити CSV лише для цього клієнта">
-                                📥 Завантажити CSV клієнта
-                            </button>
-                            <button class="btn" id="btnDeletePatient" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; background: rgba(255, 23, 68, 0.15); border-color: rgba(255, 23, 68, 0.4); color: #ff1744;" title="Безповоротно видалити пацієнта та всі його тренування">
-                                🗑️ Видалити пацієнта
-                            </button>
+                            <div class="memory-progress" style="height: 12px; background: rgba(0,0,0,0.5);">
+                                <div class="memory-bar" id="updateProgressBar" style="width: 0%; background: linear-gradient(90deg, #00f2fe, #4facfe);"></div>
+                            </div>
                         </div>
                     </div>
-
-                    <!-- Target norm and functional recovery calculation -->
-                    <div style="margin: 1rem 0; padding: 0.85rem 1rem; background: rgba(0,0,0,0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; border: 1px solid rgba(255,255,255,0.06);">
-                        <div style="display: flex; align-items: center; gap: 0.75rem;">
-                            <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);">🎯 Цільова норма суглоба:</span>
-                            <input type="number" id="targetNormInput" value="90" min="10" max="180" class="input-field" style="width: 75px; padding: 0.3rem 0.5rem; text-align: center; font-weight: 700; font-size: 0.9rem;">
-                            <span style="font-size: 0.85rem; color: var(--text-muted);">град.</span>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.6rem;">
-                            <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);">Функціональне відновлення:</span>
-                            <span id="recoveryIndexVal" style="font-size: 1.05rem; font-weight: 800; color: #00e676;">0%</span>
-                        </div>
-                    </div>
-
-                    <div class="metrics-grid" style="margin-top: 1rem;">
-                        <div class="metric-box">
-                            <span class="metric-title">Старт курсу (1-ша сесія)</span>
-                            <span class="metric-val" id="summaryStartAmp">0.0°</span>
-                            <span class="metric-sub" id="summaryStartDate" style="font-size:0.75rem;color:var(--text-secondary);">--</span>
-                        </div>
-                        <div class="metric-box highlight">
-                            <span class="metric-title">Поточний результат (Амплітуда)</span>
-                            <span class="metric-val" id="summaryCurrentAmp" style="color: var(--accent-primary);">0.0°</span>
-                            <span class="metric-sub" id="summaryCurrentDate" style="font-size:0.75rem;color:var(--text-secondary);">--</span>
-                        </div>
-                        <div class="metric-box">
-                            <span class="metric-title">Сер. індекс плавності</span>
-                            <span class="metric-val" id="summaryAvgSmooth" style="color: var(--accent-green);">0%</span>
-                            <span class="metric-sub" style="font-size:0.75rem;color:var(--text-secondary);">Контроль тремору</span>
-                        </div>
-                        <div class="metric-box">
-                            <span class="metric-title">Всього сесій / згинань</span>
-                            <span class="metric-val"><span id="summaryTotalSessions">0</span> <span style="font-size:0.95rem;font-weight:400;color:var(--text-secondary);">сес.</span> / <span id="summaryTotalFlexions" style="color:var(--accent-orange);">0</span></span>
-                            <span class="metric-sub" style="font-size:0.75rem;color:var(--text-secondary);">Загальний обсяг навантаження</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="chart-wrapper" id="chartWrapperContainer">
-                    <div id="chartInnerScroll" style="min-width: 100%; height: 100%; position: relative;">
-                        <canvas id="doctorChartCanvas"></canvas>
-                    </div>
-                </div>
-
-                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 2rem 0;">
-
-                <div class="card-title" style="margin-bottom: 1rem;">📋 Історія збережених сесій <span id="tableFilterLabel" style="font-size:0.85rem; font-weight:400; color:var(--text-secondary);">(Всі пацієнти)</span></div>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Пацієнт</th>
-                                <th>Дата і Час</th>
-                                <th>Мін / Макс Кут</th>
-                                <th>Амплітуда</th>
-                                <th>Сер. Швидкість</th>
-                                <th>Плавність</th>
-                                <th>Згинання</th>
-                                <th>Дія</th>
-                            </tr>
-                        </thead>
-                        <tbody id="sessionsTableBody">
-                            <tr>
-                                <td colspan="8" style="text-align: center; color: var(--text-secondary);">Завантаження даних...</td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
             </div>
         </section>
