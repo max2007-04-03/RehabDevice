@@ -12,7 +12,7 @@
 #define SD_CS_PIN               5   // SPI Chip Select pin for SD Card Module
 
 // ============================================================================
-// WI-FI SOFTAP AND CAPTIVE PORTAL SETTINGS
+// WI-FI SOFTAP SETTINGS
 // ============================================================================
 #define WIFI_AP_SSID            "RehabDevice_AP"
 #define WIFI_AP_PASSWORD        "rehab1234"
@@ -20,7 +20,6 @@
 #define WIFI_AP_MAX_CONNECTIONS 4
 
 #define WEB_SERVER_PORT         80
-#define DNS_SERVER_PORT         53
 
 // ============================================================================
 // WEBSOCKET AND DATA STREAMING SETTINGS
