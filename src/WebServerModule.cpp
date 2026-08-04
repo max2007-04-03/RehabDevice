@@ -1,6 +1,7 @@
 #include "WebServerModule.h"
 #include <LittleFS.h>
 #include "DatabaseManager.h"
+#include <ElegantOTA.h>
 
 // Fallback embedded HTML interface
 static const char FALLBACK_HTML[] = R"rawliteral(
@@ -36,6 +37,7 @@ void WebServerModule::init() {
     server.addHandler(&ws);
     setupRoutes();
     server.begin();
+    ElegantOTA.begin(&server);
     Serial.println("[WebServer] HTTP Server started successfully on port 80!");
 }
 
@@ -76,6 +78,11 @@ void WebServerModule::setupRoutes() {
             pendingStopSession = true;
         } else if (action == "recalibrate") {
             pendingRecalibrate = true;
+        } else if (action == "reboot") {
+            request->send(200, "application/json", "{\"ok\":true}");
+            delay(500);
+            ESP.restart();
+            return;
         }
         request->send(200, "application/json", "{\"ok\":true}");
     });
@@ -179,6 +186,8 @@ void WebServerModule::broadcastLiveStats() {
 }
 
 void WebServerModule::update() {
+    ElegantOTA.loop();
+
     if (pendingStartSession) {
         analytics->startSession(pendingPatientId);
         broadcastStatus();
