@@ -379,6 +379,18 @@
         </div>
     </div>
     
-    <script src="app.js" defer></script>
+    <script>
+        window.onerror = function(msg, src, ln, col, err) {
+            document.getElementById("statusText").textContent = "JS ERR: " + msg + " (L" + ln + ")";
+            document.getElementById("statusText").style.color = "red";
+            return false;
+        };
+        // Also catch unhandled promise rejections
+        window.addEventListener('unhandledrejection', function(event) {
+            document.getElementById("statusText").textContent = "Promise ERR: " + (event.reason ? event.reason.message : "unknown");
+            document.getElementById("statusText").style.color = "red";
+        });
+    </script>
+    <script src="app.js?v=2" defer></script>
 </body>
 </html>
