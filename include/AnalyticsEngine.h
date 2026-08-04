@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <sys/time.h>
 #include "SensorMPU.h"
-#include "MemoryFS.h"
 #include "Config.h"
 
 // Current state of the adaptive extreme points detector
@@ -14,6 +13,20 @@ enum HysteresisState {
     STATE_SEARCHING_MIN
 };
 
+struct SessionRecord {
+    String patientId;
+    unsigned long timestamp;
+    String dateStr;
+    float minAngle;
+    float maxAngle;
+    float amplitude;
+    float avgSpeed;
+    float smoothness;
+    int flexionsCount;
+    float sessionDuration;
+};
+
+
 class AnalyticsEngine {
 public:
     AnalyticsEngine();
@@ -21,8 +34,8 @@ public:
     // Start tracking session for a specific patient
     void startSession(const String& patientName);
     
-    // Stop tracking session and save record to LittleFS
-    bool stopSession(MemoryFS* fs);
+    // Stop tracking session and return record
+    bool stopSession();
     
     // Process new sensor data sample (called from main loop on data update)
     void processData(const MPUData& data);
@@ -64,9 +77,6 @@ private:
     HysteresisState hystState;
     float localExtremeAngle;
     int flexionsCount;
-    
-    // Holding time at extreme angles
-    float totalHoldingTimeSec;
     
     // Helper method to get formatted date/time string
     String getFormattedDateTime();

@@ -8,7 +8,6 @@ window.RehabGames['pingpong'] = class PingPongGame {
         // Physics & State
         this.calibMin = -20;
         this.calibMax = 20;
-        this.difficulty = 'auto';
         this.consecutiveHits = 0;
         
         // Canvas dimensions
@@ -30,10 +29,9 @@ window.RehabGames['pingpong'] = class PingPongGame {
         this.botReactionDelayTimer = 0;
     }
     
-    init(calibMin, calibMax, difficulty) {
+    init(calibMin, calibMax) {
         this.calibMin = calibMin;
         this.calibMax = calibMax;
-        this.difficulty = difficulty || 'auto';
         this.consecutiveHits = 0;
         
         this.resize(this.ctx.canvas.width, this.ctx.canvas.height);
@@ -112,15 +110,11 @@ window.RehabGames['pingpong'] = class PingPongGame {
             let maxSpeed = this.height * 0.01;
             let stateText = "";
             
-            if (this.difficulty === 'easy') { delay = 500; offset = this.paddleH * 0.45; maxSpeed *= 0.5; stateText = "Повільний (500мс)"; }
-            else if (this.difficulty === 'medium') { delay = 300; offset = this.paddleH * 0.25; maxSpeed *= 0.8; stateText = "Стандарт (300мс)"; }
-            else if (this.difficulty === 'hard') { delay = 100; offset = 0; maxSpeed *= 1.2; stateText = "Агресивний (100мс)"; }
-            else { // auto-therapy
-                delay = Math.max(100, 500 - (this.consecutiveHits * 40));
-                offset = Math.max(0, this.paddleH * 0.4 - (this.consecutiveHits * (this.paddleH * 0.05)));
-                maxSpeed = this.height * 0.006 + (this.consecutiveHits * 0.0005);
-                stateText = `Адаптація (${Math.round(delay)}мс, Шв: ${(maxSpeed/this.height*100).toFixed(1)})`;
-            }
+            // auto-therapy
+            delay = Math.max(100, 500 - (this.consecutiveHits * 40));
+            offset = Math.max(0, this.paddleH * 0.4 - (this.consecutiveHits * (this.paddleH * 0.05)));
+            maxSpeed = this.height * 0.006 + (this.consecutiveHits * 0.0005);
+            stateText = `Адаптація (${Math.round(delay)}мс, Шв: ${(maxSpeed/this.height*100).toFixed(1)})`;
             
             this.botTargetY = this.ballY + (Math.random() * offset * 2 - offset) - this.paddleH / 2;
             this.botReactionDelayTimer = delay;
@@ -130,10 +124,7 @@ window.RehabGames['pingpong'] = class PingPongGame {
         // Move bot smoothly towards target
         if (this.ballVX > 0) {
             let maxSpeed = this.height * 0.01;
-            if (this.difficulty === 'easy') maxSpeed *= 0.5;
-            else if (this.difficulty === 'medium') maxSpeed *= 0.8;
-            else if (this.difficulty === 'hard') maxSpeed *= 1.2;
-            else maxSpeed = this.height * 0.006 + (this.consecutiveHits * 0.0005);
+            maxSpeed = this.height * 0.006 + (this.consecutiveHits * 0.0005);
 
             let diff = this.botTargetY - this.botY;
             if (Math.abs(diff) > 2) {

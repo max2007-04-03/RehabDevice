@@ -17,7 +17,6 @@ void AnalyticsEngine::reset() {
     hystState = STATE_NEUTRAL;
     localExtremeAngle = 0.0f;
     flexionsCount = 0;
-    totalHoldingTimeSec = 0.0f;
     lastUpdateMs = millis();
 }
 
@@ -36,19 +35,15 @@ void AnalyticsEngine::startSession(const String& patientName) {
                   patientId.c_str(), getFormattedDateTime().c_str());
 }
 
-bool AnalyticsEngine::stopSession(MemoryFS* fs) {
+bool AnalyticsEngine::stopSession() {
     if (!sessionActive) return false;
 
     SessionRecord record = getCurrentRecord();
     sessionActive = false;
 
-    Serial.printf("[AnalyticsEngine] Session stopped. Flexions: %d, Smoothness: %.1f%%, Holding: %.1f s\n", 
-                  record.flexionsCount, record.smoothness, record.holdingTime);
-
-    if (fs) {
-        return fs->saveSession(record);
-    }
-    return false;
+    Serial.printf("[AnalyticsEngine] Session stopped. Flexions: %d, Smoothness: %.1f%%, Duration: %.1f s\n", 
+                  record.flexionsCount, record.smoothness, record.sessionDuration);
+    return true;
 }
 
 void AnalyticsEngine::processData(const MPUData& data) {
@@ -101,12 +96,6 @@ void AnalyticsEngine::processData(const MPUData& data) {
             hystState = STATE_SEARCHING_MAX;
         }
     }
-
-    // Calculate holding time at extreme points
-    if (fabs(currentAngle - localExtremeAngle) <= ANALYTICS_HOLD_TOLERANCE_DEG && 
-        currentSpeed <= ANALYTICS_HOLD_MAX_SPEED_DEG_S) {
-        totalHoldingTimeSec += dt;
-    }
 }
 
 bool AnalyticsEngine::isSessionActive() const {
@@ -124,7 +113,7 @@ SessionRecord AnalyticsEngine::getCurrentRecord() const {
     record.avgSpeed = (speedSamplesCount > 0) ? (totalSpeedSum / speedSamplesCount) : 0.0f;
     record.smoothness = smoothnessScore;
     record.flexionsCount = flexionsCount;
-    record.holdingTime = totalHoldingTimeSec;
+    record.sessionDuration = (millis() - sessionStartTimeMs) / 1000.0f;
     return record;
 }
 
@@ -133,7 +122,7 @@ String AnalyticsEngine::getLiveStatsJSON() {
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
              "{\"active\":%s,\"patientId\":\"%s\",\"minAngle\":%.1f,\"maxAngle\":%.1f,\"amplitude\":%.1f,"
-             "\"avgSpeed\":%.1f,\"smoothness\":%.1f,\"flexionsCount\":%d,\"holdingTime\":%.1f}",
+             "\"avgSpeed\":%.1f,\"smoothness\":%.1f,\"flexionsCount\":%d,\"sessionDuration\":%.1f}",
              sessionActive ? "true" : "false",
              patientId.c_str(),
              rec.minAngle,
@@ -142,7 +131,7 @@ String AnalyticsEngine::getLiveStatsJSON() {
              rec.avgSpeed,
              rec.smoothness,
              rec.flexionsCount,
-             rec.holdingTime);
+             rec.sessionDuration);
     return String(buffer);
 }
 
