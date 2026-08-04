@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <LittleFS.h>
+#include "esp_bt.h"
 #include "Config.h"
 #include "SensorMPU.h"
 #include "AnalyticsEngine.h"
@@ -18,6 +19,9 @@ WebServerModule webServer(&sensor, &analytics, &wifiManager);
 unsigned long lastWsBroadcastMs = 0;
 
 void setup() {
+    // Free up internal RAM reserved for Bluetooth Controller (~110KB)
+    esp_bt_mem_release(ESP_BT_MODE_BTDM);
+
     Serial.begin(115200);
     delay(500);
 
@@ -51,7 +55,7 @@ void setup() {
         Serial.println("[Setup] WARNING: MPU6050 not initialized! Check wiring and connections.");
     }
 
-    // 3. Initialize Wi-Fi Access Point and Captive Portal DNS server
+    // 3. Initialize Wi-Fi Access Point
     if (!wifiManager.init()) {
         Serial.println("[Setup] Error: Failed to initialize WiFiManager!");
     }
@@ -68,10 +72,7 @@ void loop() {
     // 1. Read FIFO packets from sensor via hardware interrupt without blocking
     sensor.update();
 
-    // 2. Process DNS requests for Captive Portal
-    wifiManager.update();
-
-    // 3. Clean up disconnected WebSocket clients and process non-blocking session stream queue
+    // 2. Clean up disconnected WebSocket clients and process non-blocking session stream queue
     webServer.cleanupClients();
     webServer.update();
 
