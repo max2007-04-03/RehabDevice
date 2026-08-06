@@ -1,6 +1,6 @@
 import { StateManager } from './StateManager.js';
 import { NetworkService } from './NetworkService.js';
-import { UIManager } from './UIManager.js';
+import { UIManager } from './UIManager.js?v=7';
 import { GameEngine } from './GameEngine.js';
 
 function initApp() {

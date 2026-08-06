@@ -218,17 +218,26 @@ export class NetworkService {
     }
 
     fetchAllSessionsPaginated() {
-        // Sessions always loaded via HTTP REST (never WebSocket)
+        // Sessions always loaded via HTTP REST MessagePack (never WebSocket)
         let all = [];
         let offset = 0;
         const limit = 50;
         
         const loadNextChunk = () => {
             fetch(`${this.DEVICE_HOST}/api/sessions?offset=${offset}&limit=${limit}`)
-                .then(r => r.json())
-                .then(data => {
+                .then(r => r.arrayBuffer())
+                .then(buffer => {
+                    let data = [];
+                    try {
+                        data = msgpack.decode(new Uint8Array(buffer));
+                    } catch (e) {
+                        console.error("MsgPack decode error:", e);
+                        return;
+                    }
+
                     if (!Array.isArray(data)) return;
                     all = all.concat(data);
+                    
                     if (data.length === limit) {
                         offset += limit;
                         loadNextChunk();

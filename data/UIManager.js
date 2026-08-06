@@ -118,7 +118,7 @@ export class UIManager {
 
                 if (targetId === "tabDoctor") {
                     this.updateDoctorDashboardView();
-                    this.networkService.sendCommand("getSessions");
+                    this.networkService.fetchAllSessionsPaginated();
                 }
             });
         });
@@ -182,7 +182,7 @@ export class UIManager {
                 if (engine) engine.stopGame();
                 this.networkService.sendCommand("stopSession");
                 this.stateManager.update('isAuthorized', false);
-                setTimeout(() => this.networkService.sendCommand("getSessions"), 500);
+                setTimeout(() => this.networkService.fetchAllSessionsPaginated(), 500);
             });
         }
 
@@ -224,7 +224,28 @@ export class UIManager {
                 if (result) {
                     this.networkService.sendCommand("deletePatient", { patientId: this.selectedDoctorPatient });
                     this.selectPatientByPill("ALL", true);
+                    setTimeout(() => this.networkService.fetchAllSessionsPaginated(), 1000); // refresh
                 }
+            });
+        }
+
+        const btnDownloadCSV = document.getElementById("btnDownloadCSV");
+        if (btnDownloadCSV) {
+            btnDownloadCSV.addEventListener("click", () => {
+                this.downloadCSV(this.stateManager.get('allSessionsData') || [], "All_Patients_Sessions.csv");
+            });
+        }
+
+        const btnDownloadClientCSV = document.getElementById("btnDownloadClientCSV");
+        if (btnDownloadClientCSV) {
+            btnDownloadClientCSV.addEventListener("click", () => {
+                if (this.selectedDoctorPatient === "ALL") {
+                    alert("Будь ласка, оберіть конкретного пацієнта.");
+                    return;
+                }
+                const all = this.stateManager.get('allSessionsData') || [];
+                const filtered = all.filter(s => (s.patientId || "").trim() === this.selectedDoctorPatient);
+                this.downloadCSV(filtered, `${this.selectedDoctorPatient}_Sessions.csv`);
             });
         }
 
@@ -312,6 +333,31 @@ export class UIManager {
         const filterLabel = document.getElementById("tableFilterLabel");
         const summaryBox = document.getElementById("patientSummaryContainer");
         const allSessionsData = this.stateManager.get('allSessionsData') || [];
+
+        const chartWrapper = document.getElementById("chartWrapperContainer");
+
+        if (allSessionsData.length === 0) {
+            if (summaryBox) {
+                summaryBox.innerHTML = `
+                    <div style="padding: 2.5rem 1rem; text-align: center; background: rgba(0, 242, 254, 0.05); border: 1px dashed rgba(0, 242, 254, 0.3); border-radius: 14px; margin-bottom: 0.5rem;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🏥</div>
+                        <h3 style="color: #00f2fe; font-size: 1.3rem; margin-bottom: 0.5rem; font-weight: 700;">База даних порожня</h3>
+                        <p style="color: var(--text-secondary); font-size: 0.95rem; max-width: 500px; margin: 0 auto; line-height: 1.5;">В базі даних ще немає жодного запису. Проведіть перше тренування з пацієнтом, щоб тут з'явилась аналітика.</p>
+                    </div>`;
+                summaryBox.style.display = "block";
+            }
+            if (chartWrapper) chartWrapper.style.display = "none";
+            if (filterLabel) filterLabel.textContent = "(Всі пацієнти)";
+            
+            const btnDownloadCSV = document.getElementById("btnDownloadCSV");
+            if (btnDownloadCSV) btnDownloadCSV.style.display = "none";
+            
+            return;
+        } else {
+            const btnDownloadCSV = document.getElementById("btnDownloadCSV");
+            if (btnDownloadCSV) btnDownloadCSV.style.display = "inline-block";
+            if (chartWrapper) chartWrapper.style.display = "block";
+        }
 
         let filtered = allSessionsData;
         if (isExactSearch && searchQuery && typeof searchQuery === "string" && searchQuery.length > 0) {
@@ -469,11 +515,6 @@ export class UIManager {
 
         if (chartWrap) chartWrap.style.display = "block";
 
-        const labels = [];
-        const ampData = [];
-        const smoothData = [];
-        const flexData = [];
-
         const fragment = document.createDocumentFragment();
 
         sessions.slice().reverse().forEach(rec => {
@@ -514,68 +555,204 @@ export class UIManager {
             btnDel.textContent = "🗑️";
             btnDel.onclick = () => {
                 if(confirm("Видалити запис?")) {
-                    this.networkService.sendCommand("deleteSession", { filename: rec.filename });
+                    this.networkService.sendCommand("deleteSession", { id: rec.id });
+                    setTimeout(() => this.networkService.fetchAllSessionsPaginated(), 800);
                 }
             };
             tdActions.appendChild(btnDel);
 
             tr.append(tdName, tdDate, tdMinMax, tdAmp, tdSpeed, tdSmooth, tdFlex, tdActions);
             fragment.appendChild(tr);
-
-            const dateParts = (rec.dateStr || "").split(" ");
-            const shortDate = dateParts[0] || "";
-            const shortTime = dateParts[1] || "";
-            
-            if (this.selectedDoctorPatient === "ALL") {
-                labels.push([rec.patientId || "Пацієнт", shortDate]);
-            } else {
-                labels.push([shortDate || "Сесія", shortTime]);
-            }
-
-            ampData.push(rec.amplitude || 0);
-            smoothData.push(rec.smoothness || 0);
-            flexData.push(rec.flexionsCount || 0);
         });
 
         tbody.appendChild(fragment);
-        this.updateChartData(labels, ampData, smoothData, flexData);
+        this.updateChartData(sessions);
     }
 
     initChart() {
         const ctx = document.getElementById("doctorChartCanvas");
         if (!ctx || typeof Chart === "undefined") return;
 
+        const backgroundZonesPlugin = {
+            id: 'backgroundZones',
+            beforeDraw: (chart) => {
+                const { ctx, chartArea, scales: { x, y } } = chart;
+                if (!chartArea) return;
+                
+                ctx.save();
+                
+                // Тревожная зона: X=0..40, Y=0..50
+                const xRedStart = x.getPixelForValue(0);
+                const xRedEnd = x.getPixelForValue(40);
+                const yRedStart = y.getPixelForValue(50);
+                const yRedEnd = y.getPixelForValue(0);
+                
+                ctx.fillStyle = 'rgba(255, 23, 68, 0.05)';
+                ctx.fillRect(xRedStart, yRedStart, xRedEnd - xRedStart, yRedEnd - yRedStart);
+                
+                // Целевая зона: X=60..100, Y=80..180
+                const xGreenStart = x.getPixelForValue(60);
+                const xGreenEnd = x.getPixelForValue(100);
+                const yGreenStart = y.getPixelForValue(180);
+                const yGreenEnd = y.getPixelForValue(80);
+                
+                ctx.fillStyle = 'rgba(0, 230, 118, 0.05)';
+                ctx.fillRect(xGreenStart, yGreenStart, xGreenEnd - xGreenStart, yGreenEnd - yGreenStart);
+                
+                ctx.restore();
+            }
+        };
+
         this.doctorChart = new Chart(ctx, {
-            type: "bar",
+            type: "bubble",
             data: {
-                labels: [],
-                datasets: [
-                    { label: "Амплітуда (°)", data: [], backgroundColor: "rgba(0, 242, 254, 0.7)", borderColor: "#00f2fe", borderWidth: 1, borderRadius: 6 },
-                    { label: "Плавність (%)", data: [], backgroundColor: "rgba(0, 230, 118, 0.7)", borderColor: "#00e676", borderWidth: 1, borderRadius: 6 },
-                    { label: "Згинання (шт)", data: [], backgroundColor: "rgba(255, 145, 0, 0.7)", borderColor: "#ff9100", borderWidth: 1, borderRadius: 6 }
-                ]
+                datasets: [{
+                    label: "Сесії (Матриця відновлення)",
+                    data: [],
+                    backgroundColor: [],
+                    borderColor: [],
+                    borderWidth: 1.5
+                }]
             },
+            plugins: [backgroundZonesPlugin],
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { labels: { color: "#94a3b8", font: { family: "Inter", weight: "600" } } }
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const data = context.raw;
+                                return [
+                                    `Амплітуда: ${(data.y || 0).toFixed(1)}°`,
+                                    `Плавність: ${(data.x || 0).toFixed(1)}%`,
+                                    `Згинання: ${data.flexions} шт.`
+                                ];
+                            }
+                        }
+                    }
                 },
                 scales: {
-                    x: { grid: { color: "rgba(255, 255, 255, 0.06)" }, ticks: { color: "#94a3b8" } },
-                    y: { grid: { color: "rgba(255, 255, 255, 0.06)" }, ticks: { color: "#94a3b8" } }
+                    x: {
+                        type: 'linear',
+                        min: 0,
+                        max: 100,
+                        title: { display: true, text: 'Плавність / Smoothness (%)', color: '#94a3b8' },
+                        grid: { color: "rgba(255, 255, 255, 0.06)" },
+                        ticks: { color: "#94a3b8" }
+                    },
+                    y: {
+                        type: 'linear',
+                        min: 0,
+                        max: 180,
+                        title: { display: true, text: 'Амплітуда / Amplitude (°)', color: '#94a3b8' },
+                        grid: { color: "rgba(255, 255, 255, 0.06)" },
+                        ticks: { color: "#94a3b8" }
+                    }
                 }
             }
         });
     }
 
-    updateChartData(labels, ampData, smoothData, flexData) {
+    updateChartData(sessions) {
+        const wrapper = document.getElementById("chartWrapperContainer");
+        let chartEmptyState = document.getElementById("chartEmptyState");
+        
+        if (!chartEmptyState && wrapper && wrapper.parentElement) {
+            chartEmptyState = document.createElement("div");
+            chartEmptyState.id = "chartEmptyState";
+            chartEmptyState.style.cssText = "padding: 2.5rem 1rem; text-align: center; background: rgba(0, 242, 254, 0.05); border: 1px dashed rgba(0, 242, 254, 0.3); border-radius: 14px; margin-top: 1rem; display: none;";
+            chartEmptyState.innerHTML = `
+                <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">📈</div>
+                <h3 style="color: #00f2fe; font-size: 1.1rem; margin-bottom: 0.4rem; font-weight: 700;">Графік динаміки</h3>
+                <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 400px; margin: 0 auto; line-height: 1.4;">Немає даних для побудови графіка.</p>
+            `;
+            wrapper.parentElement.insertBefore(chartEmptyState, wrapper);
+        }
+
+        if (!sessions || sessions.length === 0) {
+            if (wrapper) wrapper.style.display = "none";
+            if (chartEmptyState) chartEmptyState.style.display = "block";
+            return;
+        }
+
+        if (chartEmptyState) chartEmptyState.style.display = "none";
+        if (wrapper) wrapper.style.display = "block";
+
         if (this.doctorChart && typeof Chart !== "undefined") {
-            this.doctorChart.data.labels = labels;
-            this.doctorChart.data.datasets[0].data = ampData;
-            this.doctorChart.data.datasets[1].data = smoothData;
-            this.doctorChart.data.datasets[2].data = flexData;
+            const bubbleData = [];
+            const bgColors = [];
+            const borderColors = [];
+
+            sessions.forEach(s => {
+                const amp = s.amplitude || 0;
+                const smooth = s.smoothness || 0;
+                const flex = s.flexionsCount || 0;
+                
+                let color = "rgba(255, 145, 0, 0.7)"; // Оранжевая зона (Прогресс)
+                let border = "rgba(255, 145, 0, 1)";
+                
+                if (amp >= 80 && smooth >= 60) {
+                    color = "rgba(0, 230, 118, 0.7)"; // Зеленая зона (Норма)
+                    border = "rgba(0, 230, 118, 1)";
+                } else if (amp < 50 || smooth < 40) {
+                    color = "rgba(255, 23, 68, 0.7)"; // Красная зона (Проблема)
+                    border = "rgba(255, 23, 68, 1)";
+                }
+
+                const r = Math.min(25, Math.max(5, Math.log(flex + 1) * 4));
+
+                bubbleData.push({
+                    x: smooth,
+                    y: amp,
+                    r: r,
+                    flexions: flex
+                });
+                bgColors.push(color);
+                borderColors.push(border);
+            });
+
+            this.doctorChart.data.datasets[0].data = bubbleData;
+            this.doctorChart.data.datasets[0].backgroundColor = bgColors;
+            this.doctorChart.data.datasets[0].borderColor = borderColors;
             this.doctorChart.update();
         }
+    }
+
+    downloadCSV(sessions, filename) {
+        if (!sessions || sessions.length === 0) {
+            alert("Немає даних для експорту.");
+            return;
+        }
+
+        const headers = ["ПІБ Пацієнта", "Дата", "Мінімальний кут (°)", "Максимальний кут (°)", "Амплітуда (°)", "Середня швидкість (°/с)", "Плавність (%)", "Кількість згинань", "Тривалість сесії (с)"];
+        const csvRows = [headers.join(",")];
+
+        for (const s of sessions) {
+            const safeName = (s.patientId || 'Пацієнт').replace(/"/g, '""');
+            const safeDate = (s.dateStr || '').replace(/"/g, '""');
+            const row = [
+                `"${safeName}"`,
+                `"${safeDate}"`,
+                s.minAngle || 0,
+                s.maxAngle || 0,
+                s.amplitude || 0,
+                s.avgSpeed || 0,
+                s.smoothness || 0,
+                s.flexionsCount || 0,
+                s.sessionDuration || 0
+            ];
+            csvRows.push(row.join(","));
+        }
+
+        const blob = new Blob([csvRows.join("\n")], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.setAttribute("download", filename);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 }

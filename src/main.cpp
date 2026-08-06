@@ -139,6 +139,12 @@ void loop() {
             webServer.broadcastStatus();
         } else if (msg.cmd == CMD_RECALIBRATE) {
             sensor.recalibrate();
+        } else if (msg.cmd == CMD_DELETE_PATIENT) {
+            dbManager.deletePatient(String(msg.patientId));
+            webServer.broadcastStatus();
+        } else if (msg.cmd == CMD_DELETE_SESSION) {
+            dbManager.deleteSession(msg.sessionId);
+            webServer.broadcastStatus();
         }
     }
 

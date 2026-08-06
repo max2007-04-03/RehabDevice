@@ -21,3 +21,6 @@ Thumbs.db
 # Build temp directories
 data_gz/
 data_src_temp/
+
+# Python scripts
+scripts/

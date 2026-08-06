@@ -198,7 +198,7 @@ sqlite3_stmt* DatabaseManager::prepareSessionsQuery(int limit, int offset) {
     
     char sql[512];
     snprintf(sql, sizeof(sql), 
-        "SELECT patient_id AS patientId, timestamp, date_str AS dateStr, "
+        "SELECT id, patient_id AS patientId, timestamp, date_str AS dateStr, "
         "min_angle AS minAngle, max_angle AS maxAngle, amplitude, "
         "avg_speed AS avgSpeed, smoothness, flexions_count AS flexionsCount, "
         "session_duration AS sessionDuration "
@@ -211,6 +211,54 @@ sqlite3_stmt* DatabaseManager::prepareSessionsQuery(int limit, int offset) {
         return nullptr;
     }
     return stmt;
+}
+
+int DatabaseManager::countSessionsPage(int limit, int offset) {
+    if (!db) return 0;
+    char sql[256];
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM (SELECT 1 FROM sessions LIMIT %d OFFSET %d);", limit, offset);
+    
+    sqlite3_stmt* stmt;
+    int count = 0;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
+bool DatabaseManager::deletePatient(String patientId) {
+    if (!db || patientId.isEmpty()) return false;
+    
+    const char* sql = "DELETE FROM sessions WHERE patient_id = ?;";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        Serial.printf("[DatabaseManager] Failed to prepare deletePatient statement: %s\n", sqlite3_errmsg(db));
+        return false;
+    }
+    
+    sqlite3_bind_text(stmt, 1, patientId.c_str(), -1, SQLITE_STATIC);
+    
+    bool success = false;
+    if (sqlite3_step(stmt) == SQLITE_DONE) {
+        success = true;
+    } else {
+        Serial.printf("[DatabaseManager] Failed to execute deletePatient: %s\n", sqlite3_errmsg(db));
+    }
+    
+    sqlite3_finalize(stmt);
+    return success;
+}
+
+bool DatabaseManager::deleteSession(int id) {
+    if (!db) return false;
+    
+    char sql[128];
+    snprintf(sql, sizeof(sql), "DELETE FROM sessions WHERE id = %d;", id);
+    return execQuery(sql);
 }
 
 void DatabaseManager::close() {

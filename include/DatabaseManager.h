@@ -23,6 +23,15 @@ public:
 
     // Prepare statement for paginated sessions retrieval
     sqlite3_stmt* prepareSessionsQuery(int limit = 50, int offset = 0);
+    
+    // Get exact row count for a paginated query (needed for MsgPack array header)
+    int countSessionsPage(int limit, int offset);
+
+    // Delete all sessions for a specific patient
+    bool deletePatient(String patientId);
+
+    // Delete a single session by id
+    bool deleteSession(int id);
 
     // Check if SD is currently being used
     bool isSDAvailable() const { return usingSD; }

@@ -46,13 +46,15 @@ void WebServerModule::init() {
 class AsyncChunkedSessionsResponse : public AsyncAbstractResponse {
 private:
     sqlite3_stmt* _stmt;
-    bool _isFirstRow;
     bool _isDone;
+    int _arrayCount;
+    bool _isFirstRow;
+    JsonDocument _pendingDoc;
 
 public:
-    AsyncChunkedSessionsResponse(sqlite3_stmt* stmt) : _stmt(stmt), _isFirstRow(true), _isDone(false) {
+    AsyncChunkedSessionsResponse(sqlite3_stmt* stmt, int arrayCount) : _stmt(stmt), _isDone(false), _arrayCount(arrayCount), _isFirstRow(true) {
         _code = 200;
-        _contentType = "application/json";
+        _contentType = "application/msgpack";
         _sendContentLength = false;
         _chunked = true;
     }
@@ -69,50 +71,71 @@ public:
     }
 
     size_t _fillBuffer(uint8_t *buf, size_t maxLen) override {
-        if (_isDone || !_stmt) return 0;
+        if (_isDone && _pendingDoc.isNull()) return 0;
 
         size_t written = 0;
         
         if (_isFirstRow) {
-            buf[written++] = '[';
+            _isFirstRow = false;
+            if (_arrayCount <= 15) {
+                buf[written++] = 0x90 | _arrayCount;
+            } else if (_arrayCount <= 65535) {
+                buf[written++] = 0xdc;
+                buf[written++] = (_arrayCount >> 8) & 0xff;
+                buf[written++] = _arrayCount & 0xff;
+            } else {
+                buf[written++] = 0xdd;
+                buf[written++] = (_arrayCount >> 24) & 0xff;
+                buf[written++] = (_arrayCount >> 16) & 0xff;
+                buf[written++] = (_arrayCount >> 8) & 0xff;
+                buf[written++] = _arrayCount & 0xff;
+            }
         }
 
-        // Leave 250 bytes margin to fit a serialized row safely
-        while (written < maxLen - 250) {
+        while (written < maxLen) {
+            if (!_pendingDoc.isNull()) {
+                size_t needed = measureMsgPack(_pendingDoc);
+                if (written + needed > maxLen) {
+                    if (written == 0) {
+                        if (maxLen < needed) return 0; // Forced stop if buffer too tiny
+                    }
+                    break;
+                }
+                written += serializeMsgPack(_pendingDoc, buf + written, maxLen - written);
+                _pendingDoc.clear();
+            }
+
+            if (_isDone) break;
+
             int rc = sqlite3_step(_stmt);
             
             if (rc == SQLITE_ROW) {
-                if (!_isFirstRow) {
-                    buf[written++] = ',';
-                }
-                _isFirstRow = false;
-                
                 JsonDocument doc;
-                doc["patientId"] = sqlite3_column_text(_stmt, 0) ? (const char*)sqlite3_column_text(_stmt, 0) : "";
-                doc["timestamp"] = sqlite3_column_int(_stmt, 1);
-                doc["dateStr"] = sqlite3_column_text(_stmt, 2) ? (const char*)sqlite3_column_text(_stmt, 2) : "";
-                doc["minAngle"] = sqlite3_column_double(_stmt, 3);
-                doc["maxAngle"] = sqlite3_column_double(_stmt, 4);
-                doc["amplitude"] = sqlite3_column_double(_stmt, 5);
-                doc["avgSpeed"] = sqlite3_column_double(_stmt, 6);
-                doc["smoothness"] = sqlite3_column_double(_stmt, 7);
-                doc["flexionsCount"] = sqlite3_column_int(_stmt, 8);
-                doc["sessionDuration"] = sqlite3_column_double(_stmt, 9);
+                doc["id"] = sqlite3_column_int(_stmt, 0);
+                doc["patientId"] = sqlite3_column_text(_stmt, 1) ? (const char*)sqlite3_column_text(_stmt, 1) : "";
+                doc["timestamp"] = sqlite3_column_int(_stmt, 2);
+                doc["dateStr"] = sqlite3_column_text(_stmt, 3) ? (const char*)sqlite3_column_text(_stmt, 3) : "";
+                doc["minAngle"] = sqlite3_column_double(_stmt, 4);
+                doc["maxAngle"] = sqlite3_column_double(_stmt, 5);
+                doc["amplitude"] = sqlite3_column_double(_stmt, 6);
+                doc["avgSpeed"] = sqlite3_column_double(_stmt, 7);
+                doc["smoothness"] = sqlite3_column_double(_stmt, 8);
+                doc["flexionsCount"] = sqlite3_column_int(_stmt, 9);
+                doc["sessionDuration"] = sqlite3_column_double(_stmt, 10);
                 
-                written += serializeJson(doc, buf + written, maxLen - written);
-                
-            } else if (rc == SQLITE_DONE) {
-                buf[written++] = ']';
-                _isDone = true;
-                break;
-            } else {
-                Serial.printf("[WebServer] SQLite step error: %d\n", rc);
-                if (_isFirstRow) {
-                    buf[written++] = '[';
+                size_t needed = measureMsgPack(doc);
+                if (written + needed > maxLen) {
+                    _pendingDoc = doc;
+                    break;
                 }
-                buf[written++] = ']';
+                
+                written += serializeMsgPack(doc, buf + written, maxLen - written);
+                
+            } else {
+                if (rc != SQLITE_DONE) {
+                    Serial.printf("[WebServer] SQLite step error: %d\n", rc);
+                }
                 _isDone = true;
-                break;
             }
         }
         
@@ -146,13 +169,15 @@ void WebServerModule::setupRoutes() {
         int limit = request->hasArg("limit") ? request->arg("limit").toInt() : 50;
         int offset = request->hasArg("offset") ? request->arg("offset").toInt() : 0;
         
+        int arrayCount = dbManager.countSessionsPage(limit, offset);
+        
         sqlite3_stmt* stmt = dbManager.prepareSessionsQuery(limit, offset);
         if (!stmt) {
-            request->send(500, "application/json", "{\"error\":\"Failed to prepare statement\"}");
+            request->send(500, "application/msgpack", "{\"error\":\"Failed to prepare statement\"}");
             return;
         }
         
-        AsyncChunkedSessionsResponse* response = new AsyncChunkedSessionsResponse(stmt);
+        AsyncChunkedSessionsResponse* response = new AsyncChunkedSessionsResponse(stmt, arrayCount);
         request->send(response);
     });
 
@@ -179,6 +204,20 @@ void WebServerModule::setupRoutes() {
             SysCommandMsg msg = {};
             msg.cmd = CMD_RECALIBRATE;
             xQueueSend(sysCommandQueue, &msg, 0);
+        } else if (action == "deletePatient") {
+            if (request->hasArg("patientId")) {
+                SysCommandMsg msg = {};
+                msg.cmd = CMD_DELETE_PATIENT;
+                strncpy(msg.patientId, request->arg("patientId").c_str(), sizeof(msg.patientId) - 1);
+                xQueueSend(sysCommandQueue, &msg, 0);
+            }
+        } else if (action == "deleteSession") {
+            if (request->hasArg("id")) {
+                SysCommandMsg msg = {};
+                msg.cmd = CMD_DELETE_SESSION;
+                msg.sessionId = request->arg("id").toInt();
+                xQueueSend(sysCommandQueue, &msg, 0);
+            }
         } else if (action == "reboot") {
             request->send(200, "application/json", "{\"ok\":true}");
             delay(500);
@@ -244,6 +283,16 @@ void WebServerModule::handleWebSocketMessage(AsyncWebSocketClient* client, uint8
     } else if (cmd == "recalibrate") {
         SysCommandMsg msg = {};
         msg.cmd = CMD_RECALIBRATE;
+        xQueueSend(sysCommandQueue, &msg, 0);
+    } else if (cmd == "deletePatient") {
+        SysCommandMsg msg = {};
+        msg.cmd = CMD_DELETE_PATIENT;
+        strncpy(msg.patientId, doc["patientId"].as<const char*>(), sizeof(msg.patientId) - 1);
+        xQueueSend(sysCommandQueue, &msg, 0);
+    } else if (cmd == "deleteSession") {
+        SysCommandMsg msg = {};
+        msg.cmd = CMD_DELETE_SESSION;
+        msg.sessionId = doc["id"].as<int>();
         xQueueSend(sysCommandQueue, &msg, 0);
     }
 }
