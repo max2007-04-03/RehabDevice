@@ -34,6 +34,7 @@ public:
     // Send initial status payload to newly connected client
     void sendStatusToClient(AsyncWebSocketClient* client);
 
+
     // Clean up disconnected or timed out WebSocket clients
     void cleanupClients();
 
@@ -55,11 +56,6 @@ private:
     void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type,
                    void* arg, uint8_t* data, size_t len);
     
-    // Defer session state changes to main loop (Core 1) to avoid blocking AsyncTCP
-    bool pendingStartSession = false;
-    bool pendingStopSession = false;
-    bool pendingRecalibrate = false;
-    String pendingPatientId = "";
 
     void handleWebSocketMessage(AsyncWebSocketClient* client, uint8_t* data, size_t len);
 

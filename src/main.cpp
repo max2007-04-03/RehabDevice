@@ -8,6 +8,7 @@
 #include "WebServerModule.h"
 #include "DatabaseManager.h"
 #include "SDManager.h"
+#include "SystemCommands.h"
 
 // Global firmware module instances
 SensorMPU sensor;
@@ -15,8 +16,39 @@ AnalyticsEngine analytics;
 WiFiManagerModule wifiManager;
 WebServerModule webServer(&sensor, &analytics, &wifiManager);
 
-// Timer for periodic angle broadcast (~30 FPS)
-unsigned long lastWsBroadcastMs = 0;
+// FreeRTOS Task and Queue for sensor data
+QueueHandle_t mpuDataQueue;
+TaskHandle_t sensorTaskHandle = NULL; // Initialized to NULL for safety
+
+QueueHandle_t sysCommandQueue;
+TaskHandle_t dbTaskHandle = NULL;
+
+void dbTask(void *pvParameters) {
+    SessionRecord rec;
+    while (true) {
+        if (xQueueReceive(dbQueue, &rec, portMAX_DELAY) == pdTRUE) {
+            dbManager.saveSessionDb(rec);
+        }
+    }
+}
+
+// No global cache needed anymore (hardware clock sync)
+
+void sensorTask(void *pvParameters) {
+    while (true) {
+        // Wait indefinitely for a notification from the ISR
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        sensor.update();
+        if (sensor.isReady()) {
+            MPUData data = sensor.getData();
+            if (data.dataUpdated) {
+                // Send to queue, don't block if full
+                xQueueSend(mpuDataQueue, &data, 0);
+            }
+        }
+    }
+}
 
 void setup() {
     // Free up internal RAM reserved for Bluetooth Controller (~110KB)
@@ -50,18 +82,43 @@ void setup() {
         Serial.println("[Setup] Error: Failed to initialize DatabaseManager!");
     }
 
-    // 2. Initialize MPU6050 gyroscope/accelerometer (DMP + INT interrupts)
-    if (!sensor.init()) {
-        Serial.println("[Setup] WARNING: MPU6050 not initialized! Check wiring and connections.");
-    }
-
-    // 3. Initialize Wi-Fi Access Point
+    // 2. Initialize Wi-Fi Access Point
     if (!wifiManager.init()) {
         Serial.println("[Setup] Error: Failed to initialize WiFiManager!");
     }
 
-    // 4. Start asynchronous HTTP server and WebSockets
+    // 3. Start asynchronous HTTP server and WebSockets
     webServer.init();
+
+    // 4. Initialize MPU6050 gyroscope/accelerometer (DMP + INT interrupts)
+    if (!sensor.init()) {
+        Serial.println("[Setup] WARNING: MPU6050 not initialized! Check wiring and connections.");
+    }
+
+    // 5. Initialize FreeRTOS Queues and Tasks
+    mpuDataQueue = xQueueCreate(100, sizeof(MPUData));
+    sysCommandQueue = xQueueCreate(10, sizeof(SysCommandMsg));
+    dbQueue = xQueueCreate(10, sizeof(SessionRecord));
+
+    xTaskCreatePinnedToCore(
+        sensorTask,       // Task function
+        "SensorTask",     // Task name
+        4096,             // Stack size
+        NULL,             // Parameters
+        5,                // Priority
+        &sensorTaskHandle,// Task handle
+        0                 // Core 0
+    );
+
+    xTaskCreatePinnedToCore(
+        dbTask,           // Task function
+        "DBTask",         // Task name
+        4096,             // Stack size
+        NULL,             // Parameters
+        2,                // Priority (lower than sensor)
+        &dbTaskHandle,    // Task handle
+        0                 // Core 0
+    );
 
     Serial.println("====================================================================");
     Serial.println("  System ready! Connect to Wi-Fi network 'RehabDevice_AP'");
@@ -69,31 +126,40 @@ void setup() {
 }
 
 void loop() {
-    // 1. Read FIFO packets from sensor via hardware interrupt without blocking
-    sensor.update();
+    // 1. Process System Commands
+    SysCommandMsg msg;
+    while (xQueueReceive(sysCommandQueue, &msg, 0) == pdTRUE) {
+        if (msg.cmd == CMD_START_SESSION) {
+            analytics.startSession(String(msg.patientId));
+            webServer.broadcastStatus();
+        } else if (msg.cmd == CMD_STOP_SESSION) {
+            SessionRecord rec = analytics.getCurrentRecord();
+            analytics.stopSession();
+            dbManager.saveSession(rec); // Non-blocking push to dbQueue
+            webServer.broadcastStatus();
+        } else if (msg.cmd == CMD_RECALIBRATE) {
+            sensor.recalibrate();
+        }
+    }
 
     // 2. Clean up disconnected WebSocket clients and process non-blocking session stream queue
     webServer.cleanupClients();
     webServer.update();
 
-    // 4. Retrieve sensor data and compute analytics
-    if (sensor.isReady()) {
-        MPUData data = sensor.getData();
-        if (data.dataUpdated) {
-            // Pass angles and velocities to analytics engine for tremor and flexion detection
-            analytics.processData(data);
-
-            // Broadcast real-time data to frontend (~30 FPS)
-            unsigned long now = millis();
-            if (now - lastWsBroadcastMs >= WS_BROADCAST_INTERVAL_MS) {
-                lastWsBroadcastMs = now;
-                
-                // Broadcast current wrist roll angle for visual feedback in browser
-                webServer.broadcastAngle(data.roll);
-                
-                // Broadcast live training metrics if a patient session is active
-                webServer.broadcastLiveStats();
-            }
+    // 3. Retrieve sensor data from FreeRTOS queue and compute analytics
+    MPUData data;
+    static uint32_t packetCounter = 0;
+    
+    while (xQueueReceive(mpuDataQueue, &data, 0) == pdTRUE) {
+        // Pass every packet to analytics engine for accurate tremor and flexion detection
+        analytics.processData(data);
+        
+        packetCounter++;
+        // Hardware clock sync: MPU6050 produces 100 packets/sec. 
+        // Broadcast every 5th packet (20Hz) — sufficient for smooth UI with client-side interpolation
+        if (packetCounter % 5 == 0) {
+            webServer.broadcastAngle(data.roll);
+            webServer.broadcastLiveStats();
         }
     }
 

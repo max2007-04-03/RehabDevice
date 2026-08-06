@@ -1,7 +1,9 @@
 #include "WebServerModule.h"
 #include <LittleFS.h>
 #include "DatabaseManager.h"
+#include "DatabaseManager.h"
 #include <ElegantOTA.h>
+#include "SystemCommands.h"
 
 // Fallback embedded HTML interface
 static const char FALLBACK_HTML[] = R"rawliteral(
@@ -41,26 +43,117 @@ void WebServerModule::init() {
     Serial.println("[WebServer] HTTP Server started successfully on port 80!");
 }
 
+class AsyncChunkedSessionsResponse : public AsyncAbstractResponse {
+private:
+    sqlite3_stmt* _stmt;
+    bool _isFirstRow;
+    bool _isDone;
+
+public:
+    AsyncChunkedSessionsResponse(sqlite3_stmt* stmt) : _stmt(stmt), _isFirstRow(true), _isDone(false) {
+        _code = 200;
+        _contentType = "application/json";
+        _sendContentLength = false;
+        _chunked = true;
+    }
+
+    ~AsyncChunkedSessionsResponse() {
+        if (_stmt) {
+            sqlite3_finalize(_stmt);
+            _stmt = nullptr;
+        }
+    }
+
+    bool _sourceValid() const override {
+        return _stmt != nullptr;
+    }
+
+    size_t _fillBuffer(uint8_t *buf, size_t maxLen) override {
+        if (_isDone || !_stmt) return 0;
+
+        size_t written = 0;
+        
+        if (_isFirstRow) {
+            buf[written++] = '[';
+        }
+
+        // Leave 250 bytes margin to fit a serialized row safely
+        while (written < maxLen - 250) {
+            int rc = sqlite3_step(_stmt);
+            
+            if (rc == SQLITE_ROW) {
+                if (!_isFirstRow) {
+                    buf[written++] = ',';
+                }
+                _isFirstRow = false;
+                
+                JsonDocument doc;
+                doc["patientId"] = sqlite3_column_text(_stmt, 0) ? (const char*)sqlite3_column_text(_stmt, 0) : "";
+                doc["timestamp"] = sqlite3_column_int(_stmt, 1);
+                doc["dateStr"] = sqlite3_column_text(_stmt, 2) ? (const char*)sqlite3_column_text(_stmt, 2) : "";
+                doc["minAngle"] = sqlite3_column_double(_stmt, 3);
+                doc["maxAngle"] = sqlite3_column_double(_stmt, 4);
+                doc["amplitude"] = sqlite3_column_double(_stmt, 5);
+                doc["avgSpeed"] = sqlite3_column_double(_stmt, 6);
+                doc["smoothness"] = sqlite3_column_double(_stmt, 7);
+                doc["flexionsCount"] = sqlite3_column_int(_stmt, 8);
+                doc["sessionDuration"] = sqlite3_column_double(_stmt, 9);
+                
+                written += serializeJson(doc, buf + written, maxLen - written);
+                
+            } else if (rc == SQLITE_DONE) {
+                buf[written++] = ']';
+                _isDone = true;
+                break;
+            } else {
+                Serial.printf("[WebServer] SQLite step error: %d\n", rc);
+                if (_isFirstRow) {
+                    buf[written++] = '[';
+                }
+                buf[written++] = ']';
+                _isDone = true;
+                break;
+            }
+        }
+        
+        return written;
+    }
+};
+
 void WebServerModule::setupRoutes() {
     server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
         bool active = analytics->isSessionActive();
         SessionRecord rec = analytics->getCurrentRecord();
         MPUData mpu = sensor->getData();
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-                 "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,"
-                 "\"sessionActive\":%s,\"patientId\":\"%s\",\"angle\":%.2f,\"sdAvailable\":%s}",
-                 wifi->getConnectedClientsCount(),
-                 active ? "true" : "false", rec.patientId.c_str(), mpu.roll, dbManager.isSDAvailable() ? "true" : "false");
-                 
+        
+        JsonDocument doc;
+        doc["type"] = "status";
+        doc["connectedClients"] = wifi->getConnectedClientsCount();
+        doc["usedBytes"] = 0;
+        doc["totalBytes"] = 0;
+        doc["sessionActive"] = active;
+        doc["patientId"] = rec.patientId;
+        doc["angle"] = serialized(String(mpu.roll, 2));
+        doc["sdAvailable"] = dbManager.isSDAvailable();
+        
+        String response;
+        serializeJson(doc, response);
         Serial.printf("[WebServer] /api/status requested. Free heap: %u\n", ESP.getFreeHeap());
-        request->send(200, "application/json", buf);
+        request->send(200, "application/json", response);
     });
 
     server.on("/api/sessions", HTTP_GET, [](AsyncWebServerRequest *request) {
         int limit = request->hasArg("limit") ? request->arg("limit").toInt() : 50;
         int offset = request->hasArg("offset") ? request->arg("offset").toInt() : 0;
-        request->send(200, "application/json", dbManager.getSessionsJson(limit, offset));
+        
+        sqlite3_stmt* stmt = dbManager.prepareSessionsQuery(limit, offset);
+        if (!stmt) {
+            request->send(500, "application/json", "{\"error\":\"Failed to prepare statement\"}");
+            return;
+        }
+        
+        AsyncChunkedSessionsResponse* response = new AsyncChunkedSessionsResponse(stmt);
+        request->send(response);
     });
 
     server.on("/api/cmd", HTTP_GET, [this](AsyncWebServerRequest *request) {
@@ -73,13 +166,19 @@ void WebServerModule::setupRoutes() {
             }
         } else if (action == "startSession") {
             if (request->hasArg("patientId")) {
-                pendingPatientId = request->arg("patientId");
-                pendingStartSession = true;
+                SysCommandMsg msg = {};
+                msg.cmd = CMD_START_SESSION;
+                strncpy(msg.patientId, request->arg("patientId").c_str(), sizeof(msg.patientId) - 1);
+                xQueueSend(sysCommandQueue, &msg, 0);
             }
         } else if (action == "stopSession") {
-            pendingStopSession = true;
+            SysCommandMsg msg = {};
+            msg.cmd = CMD_STOP_SESSION;
+            xQueueSend(sysCommandQueue, &msg, 0);
         } else if (action == "recalibrate") {
-            pendingRecalibrate = true;
+            SysCommandMsg msg = {};
+            msg.cmd = CMD_RECALIBRATE;
+            xQueueSend(sysCommandQueue, &msg, 0);
         } else if (action == "reboot") {
             request->send(200, "application/json", "{\"ok\":true}");
             delay(500);
@@ -89,9 +188,6 @@ void WebServerModule::setupRoutes() {
         request->send(200, "application/json", "{\"ok\":true}");
     });
 
-    server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) { request->redirect("http://192.168.4.1/"); });
-    server.on("/fwlink", HTTP_GET, [](AsyncWebServerRequest *request) { request->redirect("http://192.168.4.1/"); });
-    server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) { request->redirect("http://192.168.4.1/"); });
 
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
     server.serveStatic("/games", LittleFS, "/games/");
@@ -110,13 +206,7 @@ void WebServerModule::setupRoutes() {
                 return;
             }
         }
-        String url = request->url();
-        bool isApiOrFile = url.startsWith("/api/") || url.endsWith(".js") || url.endsWith(".css") || url.endsWith(".json");
-        if (!isApiOrFile && !request->host().equalsIgnoreCase(WiFi.softAPIP().toString())) {
-            request->redirect("http://" + WiFi.softAPIP().toString() + "/");
-        } else {
-            request->send(404, "text/plain", "404: Not Found");
-        }
+        request->send(404, "text/plain", "404: Not Found");
     });
 }
 
@@ -143,25 +233,32 @@ void WebServerModule::handleWebSocketMessage(AsyncWebSocketClient* client, uint8
             settimeofday(&tv, NULL);
         }
     } else if (cmd == "startSession") {
-        pendingPatientId = doc["patientId"].as<String>();
-        pendingStartSession = true;
+        SysCommandMsg msg = {};
+        msg.cmd = CMD_START_SESSION;
+        strncpy(msg.patientId, doc["patientId"].as<const char*>(), sizeof(msg.patientId) - 1);
+        xQueueSend(sysCommandQueue, &msg, 0);
     } else if (cmd == "stopSession") {
-        pendingStopSession = true;
+        SysCommandMsg msg = {};
+        msg.cmd = CMD_STOP_SESSION;
+        xQueueSend(sysCommandQueue, &msg, 0);
     } else if (cmd == "recalibrate") {
-        pendingRecalibrate = true;
-    } else if (cmd == "getSessions") {
-        int limit = doc["limit"].is<int>() ? doc["limit"].as<int>() : 50;
-        int offset = doc["offset"].is<int>() ? doc["offset"].as<int>() : 0;
-        String sessionsJson = dbManager.getSessionsJson(limit, offset);
-        client->text("{\"type\":\"sessionsList\",\"sessions\":" + sessionsJson + "}");
+        SysCommandMsg msg = {};
+        msg.cmd = CMD_RECALIBRATE;
+        xQueueSend(sysCommandQueue, &msg, 0);
     }
 }
 
 void WebServerModule::broadcastAngle(float angle) {
     if (ws.count() == 0) return;
+
     char buf[64];
     snprintf(buf, sizeof(buf), "{\"type\":\"angle\",\"angle\":%.2f}", angle);
-    ws.textAll(buf);
+    
+    for (auto& client : ws.getClients()) {
+        if (client.status() == WS_CONNECTED && client.canSend()) {
+            client.text(buf);
+        }
+    }
 }
 
 void WebServerModule::broadcastStatus() {
@@ -172,11 +269,25 @@ void WebServerModule::broadcastStatus() {
 
     bool active = analytics->isSessionActive();
     SessionRecord rec = analytics->getCurrentRecord();
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,\"sessionActive\":%s,\"patientId\":\"%s\",\"sdAvailable\":%s}",
-             wifi->getConnectedClientsCount(), active ? "true" : "false", rec.patientId.c_str(), dbManager.isSDAvailable() ? "true" : "false");
-    ws.textAll(buf);
+    
+    JsonDocument doc;
+    doc["type"] = "status";
+    doc["connectedClients"] = wifi->getConnectedClientsCount();
+    doc["usedBytes"] = 0;
+    doc["totalBytes"] = 0;
+    doc["sessionActive"] = active;
+    doc["patientId"] = rec.patientId;
+    doc["sdAvailable"] = dbManager.isSDAvailable();
+    doc["version"] = FIRMWARE_VERSION;
+    
+    String buf;
+    serializeJson(doc, buf);
+             
+    for (auto& client : ws.getClients()) {
+        if (client.status() == WS_CONNECTED && client.canSend()) {
+            client.text(buf);
+        }
+    }
 }
 
 void WebServerModule::broadcastLiveStats() {
@@ -187,28 +298,16 @@ void WebServerModule::broadcastLiveStats() {
 
     String liveJson = analytics->getLiveStatsJSON();
     liveJson.replace("{\"active\"", "{\"type\":\"liveStats\",\"active\"");
-    ws.textAll(liveJson);
+    
+    for (auto& client : ws.getClients()) {
+        if (client.status() == WS_CONNECTED && client.canSend()) {
+            client.text(liveJson);
+        }
+    }
 }
 
 void WebServerModule::update() {
     // ElegantOTA.loop(); // Temporarily disabled for debugging
-
-    if (pendingStartSession) {
-        analytics->startSession(pendingPatientId);
-        broadcastStatus();
-        pendingStartSession = false;
-    }
-    if (pendingStopSession) {
-        SessionRecord rec = analytics->getCurrentRecord();
-        analytics->stopSession();
-        dbManager.saveSession(rec);
-        broadcastStatus();
-        pendingStopSession = false;
-    }
-    if (pendingRecalibrate) {
-        sensor->recalibrate();
-        pendingRecalibrate = false;
-    }
 
     if (sendInitialStatusClientId != 0) {
         AsyncWebSocketClient* client = ws.client(sendInitialStatusClientId);
@@ -225,12 +324,22 @@ void WebServerModule::sendStatusToClient(AsyncWebSocketClient* client) {
     if (!client || client->status() != WS_CONNECTED) return;
     bool active = analytics->isSessionActive();
     SessionRecord rec = analytics->getCurrentRecord();
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             "{\"type\":\"status\",\"connectedClients\":%d,\"usedBytes\":0,\"totalBytes\":0,\"sessionActive\":%s,\"patientId\":\"%s\",\"sdAvailable\":%s}",
-             wifi->getConnectedClientsCount(), active ? "true" : "false", rec.patientId.c_str(), dbManager.isSDAvailable() ? "true" : "false");
+    
+    JsonDocument doc;
+    doc["type"] = "status";
+    doc["connectedClients"] = wifi->getConnectedClientsCount();
+    doc["usedBytes"] = 0;
+    doc["totalBytes"] = 0;
+    doc["sessionActive"] = active;
+    doc["patientId"] = rec.patientId;
+    doc["sdAvailable"] = dbManager.isSDAvailable();
+    doc["version"] = FIRMWARE_VERSION;
+    
+    String buf;
+    serializeJson(doc, buf);
     client->text(buf);
 }
+
 
 void WebServerModule::cleanupClients() {
     unsigned long now = millis();

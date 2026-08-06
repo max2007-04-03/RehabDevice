@@ -52,7 +52,9 @@ private:
 
     MPUData currentData;
 
-    static volatile bool mpuInterrupt;
+    enum CalibrationState { CAL_IDLE, CAL_WAITING_FIFO };
+    CalibrationState calState;
+    uint32_t calWaitStartTime;
 };
 
 #endif // SENSOR_MPU_H

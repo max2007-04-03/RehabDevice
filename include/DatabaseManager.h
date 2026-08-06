@@ -15,11 +15,14 @@ public:
     // Initialize SQLite
     bool init(bool useSD);
 
-    // Create a new session record in the database
+    // Create a new session record by pushing to FreeRTOS queue
     bool saveSession(const SessionRecord& rec);
 
-    // Retrieve sessions as JSON string (paginated)
-    String getSessionsJson(int limit = 50, int offset = 0);
+    // Actual blocking DB write method (called from dbTask)
+    bool saveSessionDb(const SessionRecord& rec);
+
+    // Prepare statement for paginated sessions retrieval
+    sqlite3_stmt* prepareSessionsQuery(int limit = 50, int offset = 0);
 
     // Check if SD is currently being used
     bool isSDAvailable() const { return usingSD; }
@@ -44,5 +47,6 @@ private:
 };
 
 extern DatabaseManager dbManager;
+extern QueueHandle_t dbQueue;
 
 #endif // DATABASE_MANAGER_H

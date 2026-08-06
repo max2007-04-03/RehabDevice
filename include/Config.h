@@ -4,6 +4,11 @@
 #include <Arduino.h>
 
 // ============================================================================
+// FIRMWARE SETTINGS
+// ============================================================================
+#define FIRMWARE_VERSION        "v1.0.1"
+
+// ============================================================================
 // HARDWARE PIN SETTINGS (ESP-WROOM-32)
 // ============================================================================
 #define PIN_I2C_SDA             21
@@ -24,8 +29,6 @@
 // ============================================================================
 // WEBSOCKET AND DATA STREAMING SETTINGS
 // ============================================================================
-// Interval for broadcasting data to UI (33 ms = ~30 FPS for smooth circle animation)
-#define WS_BROADCAST_INTERVAL_MS 33
 // Interval for broadcasting memory status and active state (milliseconds)
 #define STATUS_UPDATE_INTERVAL_MS 2000
 

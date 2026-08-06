@@ -1,6 +1,8 @@
 #include "DatabaseManager.h"
+#include <ArduinoJson.h>
 
 DatabaseManager dbManager;
+QueueHandle_t dbQueue = NULL;
 
 const char* create_table_sql = 
     "CREATE TABLE IF NOT EXISTS sessions ("
@@ -141,6 +143,13 @@ bool DatabaseManager::mergeAndCleanupLittleFS() {
 }
 
 bool DatabaseManager::saveSession(const SessionRecord& rec) {
+    if (dbQueue != NULL) {
+        return xQueueSend(dbQueue, &rec, 0) == pdTRUE;
+    }
+    return false;
+}
+
+bool DatabaseManager::saveSessionDb(const SessionRecord& rec) {
     if (!db) return false;
 
     const char* sql = "INSERT INTO sessions (patient_id, timestamp, date_str, min_angle, max_angle, amplitude, avg_speed, smoothness, flexions_count, session_duration) "
@@ -151,7 +160,7 @@ bool DatabaseManager::saveSession(const SessionRecord& rec) {
         sqlite3_stmt* stmt;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
             Serial.printf("[DatabaseManager] Attempt %d: Failed to prepare insert statement: %s\n", attempt, sqlite3_errmsg(db));
-            delay(100);
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue; // try again
         }
 
@@ -176,7 +185,7 @@ bool DatabaseManager::saveSession(const SessionRecord& rec) {
         
         Serial.printf("[DatabaseManager] Attempt %d failed. SQLITE RC: %d, Error: %s\n", attempt, rc, sqlite3_errmsg(db));
         if (attempt < maxRetries) {
-            delay(150); // wait before next attempt
+            vTaskDelay(pdMS_TO_TICKS(150)); // wait before next attempt
         }
     }
     
@@ -184,42 +193,9 @@ bool DatabaseManager::saveSession(const SessionRecord& rec) {
     return false;
 }
 
-static int getSessionsCallback(void *data, int argc, char **argv, char **azColName) {
-    String* jsonStr = static_cast<String*>(data);
+sqlite3_stmt* DatabaseManager::prepareSessionsQuery(int limit, int offset) {
+    if (!db) return nullptr;
     
-    if (jsonStr->length() > 2) { // If not the first element (starts with "[")
-        *jsonStr += ",";
-    }
-    
-    *jsonStr += "{";
-    for (int i = 0; i < argc; i++) {
-        *jsonStr += "\"";
-        *jsonStr += azColName[i];
-        *jsonStr += "\":";
-        
-        // Check if value is a string (date_str or patient_id)
-        if (strcmp(azColName[i], "patient_id") == 0 || strcmp(azColName[i], "date_str") == 0 ||
-            strcmp(azColName[i], "patientId") == 0 || strcmp(azColName[i], "dateStr") == 0) {
-            *jsonStr += "\"";
-            *jsonStr += (argv[i] ? argv[i] : "");
-            *jsonStr += "\"";
-        } else {
-            *jsonStr += (argv[i] ? argv[i] : "0");
-        }
-        
-        if (i < argc - 1) {
-            *jsonStr += ",";
-        }
-    }
-    *jsonStr += "}";
-    
-    return 0;
-}
-
-String DatabaseManager::getSessionsJson(int limit, int offset) {
-    if (!db) return "[]";
-    
-    String jsonStr = "[";
     char sql[512];
     snprintf(sql, sizeof(sql), 
         "SELECT patient_id AS patientId, timestamp, date_str AS dateStr, "
@@ -229,15 +205,12 @@ String DatabaseManager::getSessionsJson(int limit, int offset) {
         "FROM sessions ORDER BY timestamp DESC LIMIT %d OFFSET %d;", 
         limit, offset);
     
-    char* zErrMsg = 0;
-    int rc = sqlite3_exec(db, sql, getSessionsCallback, &jsonStr, &zErrMsg);
-    if (rc != SQLITE_OK) {
-        Serial.printf("[DatabaseManager] Select error: %s\n", zErrMsg);
-        sqlite3_free(zErrMsg);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        Serial.printf("[DatabaseManager] Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        return nullptr;
     }
-    
-    jsonStr += "]";
-    return jsonStr;
+    return stmt;
 }
 
 void DatabaseManager::close() {

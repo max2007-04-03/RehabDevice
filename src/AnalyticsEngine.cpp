@@ -1,13 +1,15 @@
 #include "AnalyticsEngine.h"
 #include <time.h>
+#include <math.h>
+#include <ArduinoJson.h>
 
 AnalyticsEngine::AnalyticsEngine() : sessionActive(false), speedSamplesCount(0) {
     reset();
 }
 
 void AnalyticsEngine::reset() {
-    minAngle = 9999.0f;
-    maxAngle = -9999.0f;
+    minAngle = INFINITY;
+    maxAngle = -INFINITY;
     currentAngle = 0.0f;
     totalSpeedSum = 0.0f;
     speedSamplesCount = 0;
@@ -107,8 +109,8 @@ SessionRecord AnalyticsEngine::getCurrentRecord() const {
     record.patientId = patientId;
     record.timestamp = sessionStartUnix;
     record.dateStr = (const_cast<AnalyticsEngine*>(this))->getFormattedDateTime();
-    record.minAngle = (minAngle == 9999.0f) ? 0.0f : minAngle;
-    record.maxAngle = (maxAngle == -9999.0f) ? 0.0f : maxAngle;
+    record.minAngle = isinf(minAngle) ? 0.0f : minAngle;
+    record.maxAngle = isinf(maxAngle) ? 0.0f : maxAngle;
     record.amplitude = record.maxAngle - record.minAngle;
     record.avgSpeed = (speedSamplesCount > 0) ? (totalSpeedSum / speedSamplesCount) : 0.0f;
     record.smoothness = smoothnessScore;
@@ -119,20 +121,21 @@ SessionRecord AnalyticsEngine::getCurrentRecord() const {
 
 String AnalyticsEngine::getLiveStatsJSON() {
     SessionRecord rec = getCurrentRecord();
-    char buffer[512];
-    snprintf(buffer, sizeof(buffer),
-             "{\"active\":%s,\"patientId\":\"%s\",\"minAngle\":%.1f,\"maxAngle\":%.1f,\"amplitude\":%.1f,"
-             "\"avgSpeed\":%.1f,\"smoothness\":%.1f,\"flexionsCount\":%d,\"sessionDuration\":%.1f}",
-             sessionActive ? "true" : "false",
-             patientId.c_str(),
-             rec.minAngle,
-             rec.maxAngle,
-             rec.amplitude,
-             rec.avgSpeed,
-             rec.smoothness,
-             rec.flexionsCount,
-             rec.sessionDuration);
-    return String(buffer);
+    JsonDocument doc;
+    
+    doc["active"] = sessionActive;
+    doc["patientId"] = patientId;
+    doc["minAngle"] = serialized(String(rec.minAngle, 1));
+    doc["maxAngle"] = serialized(String(rec.maxAngle, 1));
+    doc["amplitude"] = serialized(String(rec.amplitude, 1));
+    doc["avgSpeed"] = serialized(String(rec.avgSpeed, 1));
+    doc["smoothness"] = serialized(String(rec.smoothness, 1));
+    doc["flexionsCount"] = rec.flexionsCount;
+    doc["sessionDuration"] = serialized(String(rec.sessionDuration, 1));
+
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    return jsonStr;
 }
 
 String AnalyticsEngine::getFormattedDateTime() {
