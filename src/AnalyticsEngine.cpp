@@ -106,9 +106,11 @@ bool AnalyticsEngine::isSessionActive() const {
 
 SessionRecord AnalyticsEngine::getCurrentRecord() const {
     SessionRecord record;
-    record.patientId = patientId;
+    memset(&record, 0, sizeof(SessionRecord)); // zero initialize
+    strncpy(record.patientId, patientId.c_str(), sizeof(record.patientId) - 1);
     record.timestamp = sessionStartUnix;
-    record.dateStr = (const_cast<AnalyticsEngine*>(this))->getFormattedDateTime();
+    String dateStr = (const_cast<AnalyticsEngine*>(this))->getFormattedDateTime();
+    strncpy(record.dateStr, dateStr.c_str(), sizeof(record.dateStr) - 1);
     record.minAngle = isinf(minAngle) ? 0.0f : minAngle;
     record.maxAngle = isinf(maxAngle) ? 0.0f : maxAngle;
     record.amplitude = record.maxAngle - record.minAngle;

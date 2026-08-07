@@ -16,7 +16,7 @@ enum SysCommand {
 
 struct SysCommandMsg {
     SysCommand cmd;
-    char patientId[32]; // Max 31 characters + null terminator
+    char patientId[64]; // Max 63 characters + null terminator
     int sessionId;      // For single session delete
 };
 

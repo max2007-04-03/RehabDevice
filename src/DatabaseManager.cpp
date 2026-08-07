@@ -164,9 +164,9 @@ bool DatabaseManager::saveSessionDb(const SessionRecord& rec) {
             continue; // try again
         }
 
-        sqlite3_bind_text(stmt, 1, rec.patientId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 1, rec.patientId, -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 2, rec.timestamp);
-        sqlite3_bind_text(stmt, 3, rec.dateStr.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, rec.dateStr, -1, SQLITE_STATIC);
         sqlite3_bind_double(stmt, 4, rec.minAngle);
         sqlite3_bind_double(stmt, 5, rec.maxAngle);
         sqlite3_bind_double(stmt, 6, rec.amplitude);

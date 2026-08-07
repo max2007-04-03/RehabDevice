@@ -14,9 +14,9 @@ enum HysteresisState {
 };
 
 struct SessionRecord {
-    String patientId;
+    char patientId[64];
     unsigned long timestamp;
-    String dateStr;
+    char dateStr[64];
     float minAngle;
     float maxAngle;
     float amplitude;
