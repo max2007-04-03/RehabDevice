@@ -365,7 +365,6 @@ main {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.05s linear;
 }
 
 .circle-arrow {
@@ -753,3 +752,63 @@ tr:hover td {
     box-shadow: 0 4px 12px rgba(0, 242, 254, 0.3);
 }
 
+/* --- Utility & Semantic Classes --- */
+.flex-col { display: flex; flex-direction: column; }
+.flex-row { display: flex; flex-direction: row; }
+.flex-row-center { display: flex; align-items: center; justify-content: space-between; }
+.flex-wrap { flex-wrap: wrap; }
+.gap-xs { gap: 5px; }
+.gap-s { gap: 0.5rem; }
+.gap-m { gap: 1rem; }
+.mb-0 { margin-bottom: 0 !important; }
+.mb-s { margin-bottom: 0.75rem; }
+.mt-xs { margin-top: 0.25rem; }
+.mt-s { margin-top: 0.5rem; }
+.flex-1 { flex: 1; }
+.w-full { width: 100%; }
+.h-full { height: 100%; }
+.block { display: block; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-sm { font-size: 0.8rem; }
+.text-md { font-size: 1.05rem; }
+.text-lg { font-size: 1.25rem; }
+.fw-normal { font-weight: 400; }
+.lh-1-4 { line-height: 1.4; }
+.text-secondary { color: var(--text-secondary); }
+.text-muted { color: var(--text-muted); }
+.text-success { color: var(--accent-green); }
+.text-warning { color: var(--accent-orange); }
+
+/* --- Component Classes --- */
+.info-note { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; }
+.active-patient-badge { padding: 1rem; background: rgba(0, 230, 118, 0.1); border: 1px solid rgba(0, 230, 118, 0.3); border-radius: 12px; }
+.active-patient-title { font-size: 1.25rem; color: var(--accent-green); margin-top: 0.25rem; }
+.select-dark { flex: 1; padding: 0.5rem; color: #ffffff; background-color: #1e293b; -webkit-appearance: none; appearance: none; }
+.btn-gradient-primary { background: linear-gradient(135deg, #ff007a, #7928ca); color: white; border: none; font-weight: 600; box-shadow: 0 4px 15px rgba(255, 0, 122, 0.4); padding: 0.5rem 1rem; }
+.btn-success { background: #00e676; color: #000; font-weight: bold; }
+.divider { border: 0; border-top: 1px solid var(--border-color); margin: 0.5rem 0; }
+.divider-lg { border: 0; border-top: 1px solid var(--border-color); margin: 2rem 0; }
+.setting-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 0.8rem; border-radius: 8px; }
+.toggle-checkbox { transform: scale(1.5); cursor: pointer; accent-color: #00f2fe; }
+.search-input { width: 220px; padding: 0.55rem 0.9rem; font-size: 0.88rem; }
+.btn-sm { padding: 0.55rem 1rem; font-size: 0.88rem; }
+.summary-subtitle { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); font-weight: 600; }
+.summary-title { font-size: 1.45rem; font-weight: 800; color: var(--accent-primary); margin-top: 0.15rem; }
+.btn-outline-info { padding: 0.45rem 0.9rem; font-size: 0.82rem; background: rgba(0, 242, 254, 0.15); border-color: rgba(0, 242, 254, 0.4); color: #00f2fe; }
+.btn-outline-danger { padding: 0.45rem 0.9rem; font-size: 0.82rem; background: rgba(255, 23, 68, 0.15); border-color: rgba(255, 23, 68, 0.4); color: #ff1744; }
+.target-norm-panel { margin: 1rem 0; padding: 0.85rem 1rem; background: rgba(0,0,0,0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; border: 1px solid rgba(255,255,255,0.06); }
+.norm-input { width: 75px; padding: 0.3rem 0.5rem; text-align: center; font-weight: 700; font-size: 0.9rem; }
+.recovery-value { font-size: 1.05rem; font-weight: 800; color: #00e676; }
+.chart-inner { min-width: 100%; height: 100%; position: relative; }
+.ota-panel { background: rgba(255,255,255,0.05); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border-color); }
+.progress-bar-info { background: linear-gradient(90deg, #00f2fe, #4facfe); }
+.btn-danger-solid { background: var(--accent-red) !important; border-color: var(--accent-red) !important; }
+
+/* Game overlays */
+.game-overlay { position: fixed; inset: 0; z-index: 9999; background: #000; flex-direction: column; }
+.game-overlay-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: #0f172a; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.game-engine-wrapper { flex: 1; position: relative; overflow: hidden; }
+.game-hud { position: absolute; top: 0; left: 0; width: 100%; padding: 15px; box-sizing: border-box; justify-content: space-between; color: rgba(255,255,255,0.8); font-size: 14px; font-weight: 600; pointer-events: none; z-index: 5; }
+.custom-game-ui { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.game-placeholder { position: absolute; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 10; }

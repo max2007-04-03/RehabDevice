@@ -1,6 +1,8 @@
 #include "DatabaseManager.h"
+#include <ArduinoJson.h>
 
 DatabaseManager dbManager;
+QueueHandle_t dbQueue = NULL;
 
 const char* create_table_sql = 
     "CREATE TABLE IF NOT EXISTS sessions ("
@@ -141,6 +143,13 @@ bool DatabaseManager::mergeAndCleanupLittleFS() {
 }
 
 bool DatabaseManager::saveSession(const SessionRecord& rec) {
+    if (dbQueue != NULL) {
+        return xQueueSend(dbQueue, &rec, 0) == pdTRUE;
+    }
+    return false;
+}
+
+bool DatabaseManager::saveSessionDb(const SessionRecord& rec) {
     if (!db) return false;
 
     const char* sql = "INSERT INTO sessions (patient_id, timestamp, date_str, min_angle, max_angle, amplitude, avg_speed, smoothness, flexions_count, session_duration) "
@@ -151,13 +160,13 @@ bool DatabaseManager::saveSession(const SessionRecord& rec) {
         sqlite3_stmt* stmt;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
             Serial.printf("[DatabaseManager] Attempt %d: Failed to prepare insert statement: %s\n", attempt, sqlite3_errmsg(db));
-            delay(100);
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue; // try again
         }
 
-        sqlite3_bind_text(stmt, 1, rec.patientId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 1, rec.patientId, -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 2, rec.timestamp);
-        sqlite3_bind_text(stmt, 3, rec.dateStr.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, rec.dateStr, -1, SQLITE_STATIC);
         sqlite3_bind_double(stmt, 4, rec.minAngle);
         sqlite3_bind_double(stmt, 5, rec.maxAngle);
         sqlite3_bind_double(stmt, 6, rec.amplitude);
@@ -176,7 +185,7 @@ bool DatabaseManager::saveSession(const SessionRecord& rec) {
         
         Serial.printf("[DatabaseManager] Attempt %d failed. SQLITE RC: %d, Error: %s\n", attempt, rc, sqlite3_errmsg(db));
         if (attempt < maxRetries) {
-            delay(150); // wait before next attempt
+            vTaskDelay(pdMS_TO_TICKS(150)); // wait before next attempt
         }
     }
     
@@ -184,60 +193,72 @@ bool DatabaseManager::saveSession(const SessionRecord& rec) {
     return false;
 }
 
-static int getSessionsCallback(void *data, int argc, char **argv, char **azColName) {
-    String* jsonStr = static_cast<String*>(data);
+sqlite3_stmt* DatabaseManager::prepareSessionsQuery(int limit, int offset) {
+    if (!db) return nullptr;
     
-    if (jsonStr->length() > 2) { // If not the first element (starts with "[")
-        *jsonStr += ",";
-    }
-    
-    *jsonStr += "{";
-    for (int i = 0; i < argc; i++) {
-        *jsonStr += "\"";
-        *jsonStr += azColName[i];
-        *jsonStr += "\":";
-        
-        // Check if value is a string (date_str or patient_id)
-        if (strcmp(azColName[i], "patient_id") == 0 || strcmp(azColName[i], "date_str") == 0 ||
-            strcmp(azColName[i], "patientId") == 0 || strcmp(azColName[i], "dateStr") == 0) {
-            *jsonStr += "\"";
-            *jsonStr += (argv[i] ? argv[i] : "");
-            *jsonStr += "\"";
-        } else {
-            *jsonStr += (argv[i] ? argv[i] : "0");
-        }
-        
-        if (i < argc - 1) {
-            *jsonStr += ",";
-        }
-    }
-    *jsonStr += "}";
-    
-    return 0;
-}
-
-String DatabaseManager::getSessionsJson(int limit, int offset) {
-    if (!db) return "[]";
-    
-    String jsonStr = "[";
     char sql[512];
     snprintf(sql, sizeof(sql), 
-        "SELECT patient_id AS patientId, timestamp, date_str AS dateStr, "
+        "SELECT id, patient_id AS patientId, timestamp, date_str AS dateStr, "
         "min_angle AS minAngle, max_angle AS maxAngle, amplitude, "
         "avg_speed AS avgSpeed, smoothness, flexions_count AS flexionsCount, "
         "session_duration AS sessionDuration "
         "FROM sessions ORDER BY timestamp DESC LIMIT %d OFFSET %d;", 
         limit, offset);
     
-    char* zErrMsg = 0;
-    int rc = sqlite3_exec(db, sql, getSessionsCallback, &jsonStr, &zErrMsg);
-    if (rc != SQLITE_OK) {
-        Serial.printf("[DatabaseManager] Select error: %s\n", zErrMsg);
-        sqlite3_free(zErrMsg);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        Serial.printf("[DatabaseManager] Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        return nullptr;
+    }
+    return stmt;
+}
+
+int DatabaseManager::countSessionsPage(int limit, int offset) {
+    if (!db) return 0;
+    char sql[256];
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM (SELECT 1 FROM sessions LIMIT %d OFFSET %d);", limit, offset);
+    
+    sqlite3_stmt* stmt;
+    int count = 0;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
+bool DatabaseManager::deletePatient(String patientId) {
+    if (!db || patientId.isEmpty()) return false;
+    
+    const char* sql = "DELETE FROM sessions WHERE patient_id = ?;";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        Serial.printf("[DatabaseManager] Failed to prepare deletePatient statement: %s\n", sqlite3_errmsg(db));
+        return false;
     }
     
-    jsonStr += "]";
-    return jsonStr;
+    sqlite3_bind_text(stmt, 1, patientId.c_str(), -1, SQLITE_STATIC);
+    
+    bool success = false;
+    if (sqlite3_step(stmt) == SQLITE_DONE) {
+        success = true;
+    } else {
+        Serial.printf("[DatabaseManager] Failed to execute deletePatient: %s\n", sqlite3_errmsg(db));
+    }
+    
+    sqlite3_finalize(stmt);
+    return success;
+}
+
+bool DatabaseManager::deleteSession(int id) {
+    if (!db) return false;
+    
+    char sql[128];
+    snprintf(sql, sizeof(sql), "DELETE FROM sessions WHERE id = %d;", id);
+    return execQuery(sql);
 }
 
 void DatabaseManager::close() {

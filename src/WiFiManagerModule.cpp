@@ -52,3 +52,4 @@ bool WiFiManagerModule::init() {
 int WiFiManagerModule::getConnectedClientsCount() const {
     return WiFi.softAPgetStationNum();
 }
+

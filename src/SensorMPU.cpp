@@ -1,13 +1,22 @@
 #include "SensorMPU.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-volatile bool SensorMPU::mpuInterrupt = false;
+extern TaskHandle_t sensorTaskHandle;
 
 void IRAM_ATTR SensorMPU::dmpDataReadyISR() {
-    mpuInterrupt = true;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (sensorTaskHandle != NULL) {
+        vTaskNotifyGiveFromISR(sensorTaskHandle, &xHigherPriorityTaskWoken);
+        if (xHigherPriorityTaskWoken) {
+            portYIELD_FROM_ISR();
+        }
+    }
 }
 
 SensorMPU::SensorMPU() : dmpReady(false), mpuIntStatus(0), devStatus(0), packetSize(0), fifoCount(0),
-                         pitchOffset(0.0f), rollOffset(0.0f), yawOffset(0.0f) {
+                         pitchOffset(0.0f), rollOffset(0.0f), yawOffset(0.0f),
+                         calState(CAL_IDLE), calWaitStartTime(0) {
     memset(&currentData, 0, sizeof(currentData));
 }
 
@@ -62,7 +71,6 @@ bool SensorMPU::init() {
         // Switch I2C clock to 400 kHz for high-speed operation in main loop
         Wire.setClock(400000);
         mpu.resetFIFO();
-        mpuInterrupt = false;
         fifoCount = 0;
 
         Serial.println("[SensorMPU] DMP initialized successfully! Ready (400 kHz).");
@@ -76,11 +84,48 @@ bool SensorMPU::init() {
 void SensorMPU::update() {
     if (!dmpReady) return;
 
-    if (!mpuInterrupt && fifoCount < packetSize) {
+    if (calState == CAL_WAITING_FIFO) {
+        if (millis() - calWaitStartTime > 3000) {
+            Serial.println("[SensorMPU] Recalibration timeout!");
+            calState = CAL_IDLE;
+            mpu.resetFIFO();
+            return;
+        }
+        
+        fifoCount = mpu.getFIFOCount();
+        if (fifoCount < packetSize) return;
+
+        uint8_t buffer[64];
+        if (!mpu.dmpGetCurrentFIFOPacket(buffer)) {
+            mpu.resetFIFO();
+            calState = CAL_IDLE;
+            return;
+        }
+        
+        Quaternion tempQ;
+        VectorFloat tempGravity;
+        float tempYPR[3];
+        mpu.dmpGetQuaternion(&tempQ, buffer);
+        mpu.dmpGetGravity(&tempGravity, &tempQ);
+        mpu.dmpGetYawPitchRoll(tempYPR, &tempQ, &tempGravity);
+
+        if (isnan(tempYPR[0]) || isnan(tempYPR[1]) || isnan(tempYPR[2])) {
+            mpu.resetFIFO();
+            calState = CAL_IDLE;
+            return;
+        }
+
+        yawOffset = tempYPR[0] * 180.0f / M_PI;
+        pitchOffset = tempYPR[1] * 180.0f / M_PI;
+        rollOffset = tempYPR[2] * 180.0f / M_PI;
+
+        mpu.resetFIFO();
+        fifoCount = 0;
+        calState = CAL_IDLE;
+        Serial.printf("[SensorMPU] Recalibration complete! New offsets: Y=%.2f, P=%.2f, R=%.2f\n", yawOffset, pitchOffset, rollOffset);
         return;
     }
 
-    mpuInterrupt = false;
     mpuIntStatus = mpu.getIntStatus();
     fifoCount = mpu.getFIFOCount();
 
@@ -144,42 +189,10 @@ bool SensorMPU::recalibrate() {
 
     Serial.println("[SensorMPU] Performing on-the-fly recalibration...");
     
-    mpuInterrupt = false;
     mpu.resetFIFO();
+    calState = CAL_WAITING_FIFO;
+    calWaitStartTime = millis();
 
-    delay(50);
-    uint16_t count = mpu.getFIFOCount();
-    while (count < packetSize) {
-        delay(10);
-        count = mpu.getFIFOCount();
-    }
-
-    uint8_t buffer[64];
-    if (!mpu.dmpGetCurrentFIFOPacket(buffer)) {
-        mpu.resetFIFO();
-        return false;
-    }
-    
-    Quaternion tempQ;
-    VectorFloat tempGravity;
-    float tempYPR[3];
-    mpu.dmpGetQuaternion(&tempQ, buffer);
-    mpu.dmpGetGravity(&tempGravity, &tempQ);
-    mpu.dmpGetYawPitchRoll(tempYPR, &tempQ, &tempGravity);
-
-    if (isnan(tempYPR[0]) || isnan(tempYPR[1]) || isnan(tempYPR[2])) {
-        mpu.resetFIFO();
-        return false;
-    }
-
-    yawOffset = tempYPR[0] * 180.0f / M_PI;
-    pitchOffset = tempYPR[1] * 180.0f / M_PI;
-    rollOffset = tempYPR[2] * 180.0f / M_PI;
-
-    mpu.resetFIFO();
-    mpuInterrupt = false;
-    fifoCount = 0;
-    Serial.printf("[SensorMPU] Recalibration complete! New offsets: Y=%.2f, P=%.2f, R=%.2f\n", yawOffset, pitchOffset, rollOffset);
     return true;
 }
 

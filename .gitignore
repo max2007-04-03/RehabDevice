@@ -13,8 +13,6 @@ Thumbs.db
 # Documentation files
 *.docx
 *.pdf
-Документація_проєкту_RehabDevice.docx
-RehabDevice_Documentation.docx
 
 # Compiled files
 *.bin
@@ -23,3 +21,6 @@ RehabDevice_Documentation.docx
 # Build temp directories
 data_gz/
 data_src_temp/
+
+# Python scripts
+scripts/
