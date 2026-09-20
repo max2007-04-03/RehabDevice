@@ -1,5 +1,5 @@
 // ============================================================================
-// 🐉 VR Dragon Flight v2 — Яскравий стереоскопічний 3D політ
+// 🐉 VR Dragon Flight v3 — True 3D Perspective (Camera above & behind)
 // RehabDevice IoT | Google Cardboard VR + MPU6050
 // ============================================================================
 
@@ -39,7 +39,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         this.clouds = [];
         this.crystals = [];
         this.obstacles = [];
-        this.rings = [];           // Bonus rings to fly through
+        this.rings = [];
         this.stars = [];
 
         // Score
@@ -182,7 +182,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
     update(dt, currentAngle) {
         if (dt > 0.1) dt = 0.016;
 
-        // Calibration
         let bc = false;
         if (currentAngle > this.calibMax) { this.calibMax += (currentAngle - this.calibMax) * 0.05; bc = true; }
         if (currentAngle < this.calibMin) { this.calibMin -= (this.calibMin - currentAngle) * 0.05; bc = true; }
@@ -209,7 +208,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         this.flashAlpha = Math.max(0, this.flashAlpha - dt * 4);
         this.hitCooldown = Math.max(0, this.hitCooldown - dt);
 
-        // Particles
         for (let i = this.particles.length - 1; i >= 0; i--) {
             let p = this.particles[i];
             p.life -= dt / p.ml;
@@ -218,7 +216,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             if (p.life <= 0) this.particles.splice(i, 1);
         }
 
-        // Death
         if (!this.isAlive) {
             this.respawnTimer -= dt;
             if (this.respawnTimer <= 0) {
@@ -229,7 +226,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             return;
         }
 
-        // Flight
         let moveSpd = this.baseSpeed * this.speed * dt;
         this.worldZ += moveSpd * 0.05;
         this.distanceTraveled += moveSpd;
@@ -238,11 +234,9 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         this.difficultyTimer += dt;
         this.speed = Math.min(2.5, 1.0 + this.difficultyTimer * 0.008);
 
-        // Combo decay
         this.comboTimer -= dt;
         if (this.comboTimer <= 0) this.combo = 0;
 
-        // Spawning
         this.obstacleTimer -= dt;
         this.crystalTimer -= dt;
         this.ringTimer -= dt;
@@ -251,7 +245,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             this.obstacleTimer = Math.max(1, 3.5 - this.difficultyTimer * 0.015) + Math.random() * 1.5;
         }
         if (this.crystalTimer <= 0) {
-            // Spawn crystals in a line/arc for easier collection
             let baseX = (Math.random() - 0.5) * 1.4;
             let baseZ = this.worldZ + 12 + Math.random() * 6;
             for (let i = 0; i < 3; i++) {
@@ -267,21 +260,18 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             this.ringTimer = 5 + Math.random() * 5;
         }
 
-        // Replenish terrain
         let mxZ = this.worldZ + 30;
         let lastM = this.mountains.length > 0 ? Math.max(...this.mountains.map(m => m.z)) : 0;
         while (lastM < mxZ) { lastM += 1.5 + Math.random() * 2; this._spawnMountain(lastM); }
         let lastC = this.clouds.length > 0 ? Math.max(...this.clouds.map(c => c.z)) : 0;
         while (lastC < mxZ) { lastC += 2 + Math.random() * 3; this._spawnCloud(lastC); }
 
-        // Cleanup
         this.mountains = this.mountains.filter(m => m.z > this.worldZ - 2);
         this.clouds = this.clouds.filter(c => c.z > this.worldZ - 2);
         this.obstacles = this.obstacles.filter(o => o.z > this.worldZ - 2);
         this.crystals = this.crystals.filter(c => c.z > this.worldZ - 2);
         this.rings = this.rings.filter(r => r.z > this.worldZ - 2);
 
-        // Collision
         if (this.hitCooldown <= 0) {
             for (let o of this.obstacles) {
                 if (o.hit) continue;
@@ -308,7 +298,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             }
         }
 
-        // Crystal collection — generous hitbox
         for (let cr of this.crystals) {
             if (cr.collected) continue;
             let rz = cr.z - this.worldZ;
@@ -324,7 +313,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             }
         }
 
-        // Ring pass-through
         for (let r of this.rings) {
             if (r.passed) continue;
             let rz = r.z - this.worldZ;
@@ -340,7 +328,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             }
         }
 
-        // Speed trail
         if (Math.random() < this.speed * 0.2) {
             this.particles.push({
                 x: (Math.random() - 0.5) * 2.5, y: Math.random() * 0.6, z: this.worldZ + 6 + Math.random() * 4,
@@ -379,24 +366,20 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
 
         ctx.save();
 
-        // LEFT EYE
         ctx.save();
         ctx.beginPath(); ctx.rect(0, 0, hW, H); ctx.clip();
         this._drawEye(ctx, 0, 0, hW, H, -this.eyeSeparation);
         ctx.restore();
 
-        // Divider
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(hW, 0); ctx.lineTo(hW, H); ctx.stroke();
 
-        // RIGHT EYE
         ctx.save();
         ctx.beginPath(); ctx.rect(hW, 0, hW, H); ctx.clip();
         this._drawEye(ctx, hW, 0, hW, H, this.eyeSeparation);
         ctx.restore();
 
-        // Flash
         if (this.flashAlpha > 0) {
             ctx.globalAlpha = this.flashAlpha * 0.15;
             ctx.fillStyle = this.flashColor;
@@ -404,7 +387,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.globalAlpha = 1;
         }
 
-        // Death overlay
         if (!this.isAlive) {
             ctx.fillStyle = 'rgba(10, 0, 0, 0.65)';
             ctx.fillRect(0, 0, W, H);
@@ -425,7 +407,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.restore();
     }
 
-    // === SINGLE EYE ===
     _drawEye(ctx, ox, oy, vw, vh, eyeOff) {
         let hx = this.headYaw * vw * 0.12 + eyeOff * vw;
         let hy = this.headPitch * vh * 0.08;
@@ -433,12 +414,13 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         let sy = this.shakeIntensity > 0 ? (Math.random() - 0.5) * this.shakeIntensity : 0;
         let cx = hx + sx, cy = hy + sy;
 
+        // Correct 3D Drawing Order
         this._drawSky(ctx, ox, oy, vw, vh, cy);
         this._drawStars(ctx, ox, oy, vw, vh, cx, cy);
         this._drawSun(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawGround(ctx, ox, oy, vw, vh, cx, cy); // Ground is drawn before 3D objects
         this._drawMtns(ctx, ox, oy, vw, vh, cx, cy);
         this._drawClouds(ctx, ox, oy, vw, vh, cx, cy);
-        this._drawGround(ctx, ox, oy, vw, vh, cx, cy);
         this._drawRings(ctx, ox, oy, vw, vh, cx, cy);
         this._drawObs(ctx, ox, oy, vw, vh, cx, cy);
         this._drawCrystals(ctx, ox, oy, vw, vh, cx, cy);
@@ -447,17 +429,24 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         this._drawInEyeHUD(ctx, ox, oy, vw, vh);
     }
 
+    // === TRUE 3D PROJECTION ===
     _proj(x, y, z, vw, vh, cx, cy) {
         let rz = z - this.worldZ;
         if (rz <= 0.1) rz = 0.1;
         let s = 0.5 / rz;
-        return { x: vw / 2 + x * s * vw + cx, y: vh * 0.65 - y * s * vh + cy, s };
+        
+        let cameraHeight = 0.7;    // Camera altitude
+        let horizon = vh * 0.35;   // Horizon is high up (35% from top)
+        
+        return { 
+            x: vw / 2 + x * s * vw + cx, 
+            y: horizon + (cameraHeight - y) * s * vh + cy, 
+            s 
+        };
     }
 
-    // === SKY (vibrant gradient) ===
     _drawSky(ctx, ox, oy, vw, vh, cy) {
         let g = ctx.createLinearGradient(ox, oy + cy * 0.5, ox, oy + vh);
-        // Beautiful vibrant sky
         g.addColorStop(0, '#0b0d2a');
         g.addColorStop(0.15, '#141852');
         g.addColorStop(0.35, '#1e3a6e');
@@ -468,7 +457,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.fillStyle = g;
         ctx.fillRect(ox, oy, vw, vh);
 
-        // Aurora shimmer
         ctx.save();
         ctx.globalAlpha = 0.07;
         ctx.globalCompositeOperation = 'screen';
@@ -496,7 +484,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
     _drawStars(ctx, ox, oy, vw, vh, cx, cy) {
         let t = performance.now() / 1000;
         for (let s of this.stars) {
-            let p = this._proj(s.x, s.y + 0.6, this.worldZ + s.z, vw, vh, cx, cy);
+            let p = this._proj(s.x, s.y + 1.2, this.worldZ + s.z, vw, vh, cx, cy);
             if (p.x < 0 || p.x > vw) continue;
             let tw = 0.4 + 0.6 * Math.sin(t * 2.5 + s.twinkle);
             ctx.fillStyle = `rgba(255,255,255,${tw * 0.7})`;
@@ -506,13 +494,11 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         }
     }
 
-    // === SUN (vibrant) ===
     _drawSun(ctx, ox, oy, vw, vh, cx, cy) {
         let sunX = ox + vw * 0.7 + cx * 0.3;
         let sunY = oy + vh * 0.12 + cy * 0.2;
         let sunR = Math.min(vw, vh) * 0.06;
 
-        // Glow rings
         for (let i = 3; i >= 0; i--) {
             let r = sunR * (1 + i * 0.8);
             let alpha = 0.04 - i * 0.008;
@@ -522,7 +508,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.fill();
         }
 
-        // Sun body
         let sg = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR);
         sg.addColorStop(0, '#fff8e1');
         sg.addColorStop(0.5, '#ffecb3');
@@ -533,7 +518,15 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.fill();
     }
 
-    // === MOUNTAINS (colorful) ===
+    _drawGround(ctx, ox, oy, vw, vh, cx, cy) {
+        let horizonY = vh * 0.35 + cy; // Match projection horizon
+        let g = ctx.createLinearGradient(ox, oy + horizonY, ox, oy + vh);
+        g.addColorStop(0, 'rgba(15, 45, 25, 0.4)');
+        g.addColorStop(1, 'rgba(8, 25, 15, 0.9)');
+        ctx.fillStyle = g;
+        ctx.fillRect(ox, oy + horizonY, vw, vh - horizonY);
+    }
+
     _drawMtns(ctx, ox, oy, vw, vh, cx, cy) {
         let sorted = [...this.mountains].sort((a, b) => b.z - a.z);
         for (let m of sorted) {
@@ -546,7 +539,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             if (fog <= 0) continue;
 
             ctx.globalAlpha = fog;
-            // Colorful mountains with green tones
             let mg = ctx.createLinearGradient(ox + p.x, oy + p.y - sh, ox + p.x, oy + p.y);
             mg.addColorStop(0, `hsl(${m.hue}, 35%, 30%)`);
             mg.addColorStop(1, `hsl(${m.hue}, 25%, 18%)`);
@@ -561,7 +553,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.closePath();
             ctx.fill();
 
-            // Snow
             if (m.snow) {
                 ctx.fillStyle = `rgba(230, 240, 255, ${fog * 0.6})`;
                 ctx.beginPath();
@@ -579,7 +570,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         for (let c of this.clouds) {
             let rz = c.z - this.worldZ;
             if (rz < 0.5 || rz > 20) continue;
-            let p = this._proj(c.x, c.y + 0.4, c.z, vw, vh, cx, cy);
+            let p = this._proj(c.x, c.y + 1.2, c.z, vw, vh, cx, cy);
             let cw = c.w * p.s * vw;
             let ch = c.h * p.s * vh;
             let fog = Math.max(0, 1 - rz * 0.05);
@@ -595,23 +586,13 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         }
     }
 
-    _drawGround(ctx, ox, oy, vw, vh, cx, cy) {
-        let gy = vh * 0.65 + cy;
-        let g = ctx.createLinearGradient(ox, oy + gy, ox, oy + vh);
-        g.addColorStop(0, 'rgba(15, 45, 25, 0.4)');
-        g.addColorStop(1, 'rgba(8, 25, 15, 0.9)');
-        ctx.fillStyle = g;
-        ctx.fillRect(ox, oy + gy, vw, vh - gy);
-    }
-
-    // === RINGS (golden hoops) ===
     _drawRings(ctx, ox, oy, vw, vh, cx, cy) {
         let t = performance.now() / 1000;
         for (let r of this.rings) {
             if (r.passed) continue;
             let rz = r.z - this.worldZ;
             if (rz < 0 || rz > 18) continue;
-            let p = this._proj(r.x, 0.35, r.z, vw, vh, cx, cy);
+            let p = this._proj(r.x, 0.3, r.z, vw, vh, cx, cy);
             let rs = r.size * p.s * vw;
             let fog = Math.max(0.2, 1 - rz * 0.03);
 
@@ -623,7 +604,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.beginPath();
             ctx.ellipse(ox + p.x, oy + p.y, rs, rs * 0.6, 0, 0, 6.28);
             ctx.stroke();
-            // Inner ring
             ctx.strokeStyle = '#FFA000';
             ctx.lineWidth = Math.max(1, rs * 0.05);
             ctx.beginPath();
@@ -634,7 +614,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         }
     }
 
-    // === OBSTACLES ===
     _drawObs(ctx, ox, oy, vw, vh, cx, cy) {
         let sorted = [...this.obstacles].sort((a, b) => b.z - a.z);
         for (let o of sorted) {
@@ -658,7 +637,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.closePath();
             ctx.fill();
 
-            // Warning glow
             if (rz < 4 && !o.hit) {
                 let u = Math.max(0, 1 - rz / 4);
                 ctx.strokeStyle = `rgba(255, 50, 50, ${u * 0.6})`;
@@ -668,25 +646,21 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         }
     }
 
-    // === CRYSTALS (bright, glowing) ===
     _drawCrystals(ctx, ox, oy, vw, vh, cx, cy) {
         let t = performance.now() / 1000;
         for (let cr of this.crystals) {
             if (cr.collected) continue;
             let rz = cr.z - this.worldZ;
             if (rz < 0 || rz > 18) continue;
-            let bobY = 0.35 + Math.sin(t * 3 + cr.phase) * 0.02;
+            let bobY = 0.3 + Math.sin(t * 3 + cr.phase) * 0.02;
             let p = this._proj(cr.x, bobY, cr.z, vw, vh, cx, cy);
             let cs = cr.size * p.s * vw;
             let fog = Math.max(0.2, 1 - rz * 0.035);
 
             ctx.globalAlpha = fog;
-
-            // Bright glow
             ctx.shadowBlur = cs * 4;
             ctx.shadowColor = '#00f2fe';
 
-            // Diamond
             ctx.fillStyle = '#00e5ff';
             ctx.beginPath();
             ctx.moveTo(ox + p.x, oy + p.y - cs * 1.2);
@@ -696,7 +670,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.closePath();
             ctx.fill();
 
-            // Inner highlight
             ctx.fillStyle = 'rgba(255,255,255,0.6)';
             ctx.beginPath();
             ctx.moveTo(ox + p.x, oy + p.y - cs * 0.8);
@@ -725,7 +698,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
                     ctx.fill();
                 }
             } else {
-                // Screen-space particle
                 ctx.globalAlpha = Math.max(0, p.life);
                 ctx.fillStyle = p.color;
                 ctx.beginPath();
@@ -736,10 +708,10 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.globalAlpha = 1;
     }
 
-    // === DRAGON ===
     _drawDragon(ctx, ox, oy, vw, vh, cx, cy) {
         let dx = vw / 2 + this.dragonX * vw * 0.3 + cx;
-        let dy = vh * 0.35 + cy;
+        // Dragon is locked in the lower screen (75%)
+        let dy = vh * 0.75 + cy; 
         let sc = Math.min(vw, vh) * 0.0018;
         if (sc < 0.5) sc = 0.5;
 
@@ -754,7 +726,6 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
 
         let wA = Math.sin(this.wingPhase) * 0.5;
 
-        // Tail
         ctx.strokeStyle = '#2E7D32';
         ctx.lineWidth = 5;
         ctx.beginPath();
@@ -767,11 +738,9 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.moveTo(tx, 80); ctx.lineTo(tx - 8, 92); ctx.lineTo(tx + 8, 92);
         ctx.closePath(); ctx.fill();
 
-        // Wings
         this._drawWing(ctx, -15, -5, -1, wA, sc);
         this._drawWing(ctx, 15, -5, 1, wA, sc);
 
-        // Body
         let bg = ctx.createLinearGradient(0, -30, 0, 35);
         bg.addColorStop(0, '#2E7D32');
         bg.addColorStop(0.5, '#43A047');
@@ -779,39 +748,33 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.fillStyle = bg;
         ctx.beginPath(); ctx.ellipse(0, 10, 16, 30, 0, 0, 6.28); ctx.fill();
 
-        // Belly
         ctx.fillStyle = '#A5D6A7';
         ctx.beginPath(); ctx.ellipse(0, 14, 10, 18, 0, 0, 6.28); ctx.fill();
         ctx.strokeStyle = 'rgba(0,0,0,0.08)';
         ctx.lineWidth = 0.5;
         for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(-8, 10 + i * 6); ctx.lineTo(8, 10 + i * 6); ctx.stroke(); }
 
-        // Legs
         ctx.fillStyle = '#2E7D32';
         ctx.beginPath(); ctx.ellipse(-12, 30, 5, 8, -0.3, 0, 6.28); ctx.fill();
         ctx.beginPath(); ctx.ellipse(12, 30, 5, 8, 0.3, 0, 6.28); ctx.fill();
 
-        // Neck
         ctx.fillStyle = '#2E7D32';
         ctx.beginPath();
         ctx.moveTo(-8, -20); ctx.quadraticCurveTo(-4, -42, 0, -50);
         ctx.quadraticCurveTo(4, -42, 8, -20);
         ctx.closePath(); ctx.fill();
 
-        // Head
         let hg = ctx.createRadialGradient(0, -54, 0, 0, -54, 14);
         hg.addColorStop(0, '#43A047'); hg.addColorStop(1, '#2E7D32');
         ctx.fillStyle = hg;
         ctx.beginPath(); ctx.ellipse(0, -54, 14, 12, 0, 0, 6.28); ctx.fill();
 
-        // Snout
         ctx.fillStyle = '#388E3C';
         ctx.beginPath(); ctx.ellipse(0, -65, 9, 6, 0, 0, 6.28); ctx.fill();
         ctx.fillStyle = '#1B5E20';
         ctx.beginPath(); ctx.arc(-3, -67, 1.5, 0, 6.28); ctx.fill();
         ctx.beginPath(); ctx.arc(3, -67, 1.5, 0, 6.28); ctx.fill();
 
-        // Eyes
         ctx.fillStyle = '#FFD600';
         ctx.beginPath(); ctx.ellipse(-7, -56, 4.5, 4, 0, 0, 6.28); ctx.fill();
         ctx.beginPath(); ctx.ellipse(7, -56, 4.5, 4, 0, 0, 6.28); ctx.fill();
@@ -824,19 +787,16 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.beginPath(); ctx.arc(7, -56, 7, 0, 6.28); ctx.fill();
         ctx.shadowBlur = 0;
 
-        // Horns
         ctx.fillStyle = '#4E342E';
         ctx.beginPath(); ctx.moveTo(-11, -62); ctx.lineTo(-17, -76); ctx.lineTo(-8, -64); ctx.closePath(); ctx.fill();
         ctx.beginPath(); ctx.moveTo(11, -62); ctx.lineTo(17, -76); ctx.lineTo(8, -64); ctx.closePath(); ctx.fill();
 
-        // Spines
         ctx.fillStyle = '#FF6F00';
         for (let i = 0; i < 5; i++) {
             let ry = -48 + i * 15, rs = 5 - i * 0.6;
             ctx.beginPath(); ctx.moveTo(0, ry - rs); ctx.lineTo(-rs * 0.7, ry + rs * 0.4); ctx.lineTo(rs * 0.7, ry + rs * 0.4); ctx.closePath(); ctx.fill();
         }
 
-        // Fire
         if (this.speed > 1.3) {
             let fa = Math.min(1, (this.speed - 1.3) * 2);
             let fl = 18 + Math.random() * 12;
@@ -871,13 +831,11 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.restore();
     }
 
-    // === IN-EYE HUD (rendered on canvas for VR) ===
     _drawInEyeHUD(ctx, ox, oy, vw, vh) {
         let fs = Math.min(11, vw * 0.035);
         ctx.font = `bold ${fs}px 'Inter', sans-serif`;
         ctx.textAlign = 'center';
 
-        // Score bar (top)
         let barW = vw * 0.85;
         let barX = ox + (vw - barW) / 2;
         let barY = oy + 8;
@@ -889,26 +847,21 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             ctx.fillRect(barX, barY, barW, fs + 10);
         }
 
-        // Lives
         let hearts = '❤️'.repeat(this.lives) + '🖤'.repeat(3 - this.lives);
 
-        // Left: score + crystals
         ctx.textAlign = 'left';
         ctx.fillStyle = '#FFD700';
         ctx.fillText(`⭐ ${Math.floor(this.score)}`, barX + 8, barY + fs + 3);
 
-        // Center: crystals + combo
         ctx.textAlign = 'center';
         let comboStr = this.combo > 1 ? ` 🔥x${this.combo}` : '';
         ctx.fillStyle = '#00e5ff';
         ctx.fillText(`💎 ${this.crystalsCollected}${comboStr}`, ox + vw / 2, barY + fs + 3);
 
-        // Right: lives
         ctx.textAlign = 'right';
         ctx.fillStyle = '#fff';
         ctx.fillText(hearts, barX + barW - 8, barY + fs + 3);
 
-        // Distance (bottom)
         let dist = Math.floor(this.distanceTraveled);
         ctx.textAlign = 'center';
         ctx.fillStyle = 'rgba(255,255,255,0.5)';
