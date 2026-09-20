@@ -1,10 +1,6 @@
 // ============================================================================
-// 🐉 VR Dragon Flight — Політ на драконі у стереоскопічному 3D
-// RehabDevice IoT System | Google Cardboard VR + MPU6050 Sensor
-// ============================================================================
-// Стереоскопічний рендеринг: екран розділений на 2 половини (ліве/праве око)
-// Управління: кисть (MPU6050) → вліво-вправо; голова (гіроскоп телефону) → огляд
-// Тренує: амплітуду руху, координацію, плавність переходів
+// 🐉 VR Dragon Flight v2 — Яскравий стереоскопічний 3D політ
+// RehabDevice IoT | Google Cardboard VR + MPU6050
 // ============================================================================
 
 window.RehabGames = window.RehabGames || {};
@@ -13,288 +9,219 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
     constructor(ctx, api) {
         this.ctx = ctx;
         this.api = api;
-
         this.width = ctx.canvas.width;
         this.height = ctx.canvas.height;
 
-        // Calibration
         this.calibMin = -20;
         this.calibMax = 20;
 
-        // VR stereo parameters
-        this.eyeSeparation = 0.03;   // Normalized eye offset (3% of half-width)
-        this.focalLength = 0.5;       // Depth convergence point
+        // VR stereo
+        this.eyeSeparation = 0.03;
 
-        // Head tracking (phone gyroscope)
-        this.headYaw = 0;             // Left-right head rotation
-        this.headPitch = 0;           // Up-down head rotation
-        this.headTrackingEnabled = false;
+        // Head tracking
+        this.headYaw = 0;
+        this.headPitch = 0;
         this._initHeadTracking();
 
-        // Dragon position & flight
-        this.dragonX = 0;             // -1 to 1 (lateral position)
+        // Dragon
+        this.dragonX = 0;
         this.dragonTargetX = 0;
-        this.dragonTilt = 0;          // Visual banking angle
-        this.dragonBob = 0;           // Wing flap bobbing
-        this.dragonBobPhase = 0;
-        this.wingPhase = 0;           // Wing animation
+        this.dragonTilt = 0;
+        this.wingPhase = 0;
 
-        // World scrolling (forward flight)
-        this.worldZ = 0;              // How far we've traveled
-        this.speed = 1.0;             // Forward speed multiplier
-        this.baseSpeed = 80;          // Units per second
+        // World
+        this.worldZ = 0;
+        this.speed = 1.0;
+        this.baseSpeed = 80;
 
-        // Terrain / Mountains
+        // Objects
         this.mountains = [];
         this.clouds = [];
         this.crystals = [];
-        this.obstacles = [];          // Rock pillars to dodge
+        this.obstacles = [];
+        this.rings = [];           // Bonus rings to fly through
         this.stars = [];
 
-        // Score & game state
+        // Score
         this.score = 0;
         this.crystalsCollected = 0;
+        this.ringsPassed = 0;
         this.distanceTraveled = 0;
-        this.isAlive = true;
-        this.hitCooldown = 0;
+        this.bestScore = 0;
         this.lives = 3;
+        this.hitCooldown = 0;
+        this.isAlive = true;
+        this.respawnTimer = 0;
 
         // Effects
         this.particles = [];
-        this.speedLines = [];
         this.shakeIntensity = 0;
         this.flashAlpha = 0;
         this.flashColor = '';
+        this.comboTimer = 0;
+        this.combo = 0;
 
-        // Difficulty progression
+        // Difficulty
         this.difficultyTimer = 0;
-        this.obstacleSpawnTimer = 0;
-        this.crystalSpawnTimer = 0;
+        this.obstacleTimer = 0;
+        this.crystalTimer = 0;
+        this.ringTimer = 0;
 
-        // Fog & atmosphere
-        this.fogDensity = 0.0015;
-        this.sunAngle = 0;
-        this.timeOfDay = 0;           // 0-1 day cycle
-
-        // VR mode indicator
-        this.vrModeActive = true;
-
-        // Generate initial world
-        this._initWorld();
+        // Visuals
+        this.rainbowPhase = 0;
+        this.sunGlow = 0;
     }
 
     init(calibMin, calibMax) {
         this.calibMin = calibMin;
         this.calibMax = calibMax;
         this.resize(this.ctx.canvas.width, this.ctx.canvas.height);
-
         this.score = 0;
         this.crystalsCollected = 0;
+        this.ringsPassed = 0;
         this.distanceTraveled = 0;
-        this.isAlive = true;
         this.lives = 3;
+        this.isAlive = true;
         this.dragonX = 0;
         this.worldZ = 0;
         this.speed = 1.0;
+        this.difficultyTimer = 0;
+        this.combo = 0;
         this.particles = [];
-
         this._initWorld();
         this._updateHUD();
-
-        // Show VR instruction via custom HTML
-        this.api.setCustomHTML(`
-            <div style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
-                        background:rgba(0,0,0,0.7);color:#00f2fe;padding:12px 24px;
-                        border-radius:12px;font-size:14px;text-align:center;
-                        border:1px solid rgba(0,242,254,0.3);pointer-events:none;z-index:20;">
-                🐉 VR Дракон | Вставте телефон у Cardboard
-            </div>
-        `);
-        setTimeout(() => this.api.clearCustomHTML(), 4000);
     }
 
-    resize(width, height) {
-        this.width = width;
-        this.height = height;
-    }
+    resize(w, h) { this.width = w; this.height = h; }
 
-    // ========================================================================
-    // HEAD TRACKING (Phone Gyroscope)
-    // ========================================================================
     _initHeadTracking() {
-        // Request permission for DeviceOrientation (required on iOS 13+)
         if (typeof DeviceOrientationEvent !== 'undefined' &&
             typeof DeviceOrientationEvent.requestPermission === 'function') {
-            // iOS — need user gesture to request
-            const handler = () => {
-                DeviceOrientationEvent.requestPermission().then(state => {
-                    if (state === 'granted') this._attachOrientationListener();
+            const h = () => {
+                DeviceOrientationEvent.requestPermission().then(s => {
+                    if (s === 'granted') this._attachOrientation();
                 }).catch(() => {});
-                document.removeEventListener('touchstart', handler);
+                document.removeEventListener('touchstart', h);
             };
-            document.addEventListener('touchstart', handler, { once: true });
+            document.addEventListener('touchstart', h, { once: true });
         } else {
-            this._attachOrientationListener();
+            this._attachOrientation();
         }
     }
 
-    _attachOrientationListener() {
-        this._orientationHandler = (e) => {
-            if (e.gamma !== null && e.beta !== null) {
-                this.headTrackingEnabled = true;
-                // gamma = left/right tilt (-90 to 90) → yaw
-                // beta = front/back tilt (-180 to 180) → pitch
-                // In landscape Cardboard mode:
-                this.headYaw = (e.gamma || 0) * 0.015;    // Subtle head look
-                this.headPitch = ((e.beta || 0) - 70) * 0.01; // Centered around ~70° (holding phone upright in cardboard)
+    _attachOrientation() {
+        this._orientHandler = (e) => {
+            if (e.gamma !== null) {
+                this.headYaw = (e.gamma || 0) * 0.012;
+                this.headPitch = ((e.beta || 0) - 70) * 0.008;
             }
         };
-        window.addEventListener('deviceorientation', this._orientationHandler);
+        window.addEventListener('deviceorientation', this._orientHandler);
     }
 
-    // ========================================================================
-    // WORLD GENERATION
-    // ========================================================================
+    // === WORLD ===
     _initWorld() {
-        // Background stars
         this.stars = [];
-        for (let i = 0; i < 80; i++) {
+        for (let i = 0; i < 100; i++) {
             this.stars.push({
-                x: (Math.random() - 0.5) * 4,
-                y: Math.random() * 0.6 - 0.1,
-                z: 5 + Math.random() * 20,
-                size: 0.5 + Math.random() * 1.5,
-                twinkle: Math.random() * Math.PI * 2
+                x: (Math.random() - 0.5) * 5,
+                y: Math.random() * 0.5,
+                z: 5 + Math.random() * 25,
+                size: 0.5 + Math.random() * 2,
+                twinkle: Math.random() * 6.28
             });
         }
-
-        // Initial mountains
         this.mountains = [];
-        for (let z = 2; z < 30; z += 1.5 + Math.random() * 2) {
-            this._spawnMountain(z);
-        }
-
-        // Initial clouds
+        for (let z = 3; z < 35; z += 1.5 + Math.random() * 2) this._spawnMountain(z);
         this.clouds = [];
-        for (let z = 3; z < 25; z += 2 + Math.random() * 3) {
-            this._spawnCloud(z);
-        }
-
-        // Obstacles and crystals
+        for (let z = 3; z < 25; z += 2 + Math.random() * 3) this._spawnCloud(z);
         this.obstacles = [];
         this.crystals = [];
+        this.rings = [];
     }
 
     _spawnMountain(z) {
         let side = Math.random() > 0.5 ? 1 : -1;
         this.mountains.push({
-            x: side * (0.6 + Math.random() * 1.2),
-            z: z,
-            width: 0.4 + Math.random() * 0.8,
-            height: 0.3 + Math.random() * 0.7,
-            color: Math.random() > 0.5 ? 0 : 1, // 0=gray, 1=brown
-            snowCap: Math.random() > 0.4
+            x: side * (0.8 + Math.random() * 1.0),
+            z, w: 0.5 + Math.random() * 0.8, h: 0.4 + Math.random() * 0.6,
+            hue: 100 + Math.random() * 60, snow: Math.random() > 0.35
         });
     }
 
     _spawnCloud(z) {
         this.clouds.push({
-            x: (Math.random() - 0.5) * 3,
-            y: 0.2 + Math.random() * 0.4,
-            z: z,
-            width: 0.2 + Math.random() * 0.4,
-            height: 0.05 + Math.random() * 0.1,
-            opacity: 0.15 + Math.random() * 0.25
+            x: (Math.random() - 0.5) * 3, y: 0.3 + Math.random() * 0.3, z,
+            w: 0.2 + Math.random() * 0.35, h: 0.06 + Math.random() * 0.08,
+            op: 0.2 + Math.random() * 0.3
         });
     }
 
     _spawnObstacle(z) {
-        let laneX = (Math.random() - 0.5) * 1.4;
         this.obstacles.push({
-            x: laneX,
-            z: z,
-            width: 0.12 + Math.random() * 0.1,
-            height: 0.5 + Math.random() * 0.5,
-            hit: false
+            x: (Math.random() - 0.5) * 1.4, z,
+            w: 0.1 + Math.random() * 0.1, h: 0.4 + Math.random() * 0.4, hit: false
         });
     }
 
     _spawnCrystal(z) {
-        let laneX = (Math.random() - 0.5) * 1.6;
         this.crystals.push({
-            x: laneX,
-            y: 0.1 + Math.random() * 0.3,
-            z: z,
-            collected: false,
-            rotPhase: Math.random() * Math.PI * 2,
-            size: 0.04 + Math.random() * 0.02
+            x: (Math.random() - 0.5) * 1.6, z,
+            collected: false, phase: Math.random() * 6.28, size: 0.035
         });
     }
 
-    // ========================================================================
-    // MAIN UPDATE
-    // ========================================================================
+    _spawnRing(z) {
+        this.rings.push({
+            x: (Math.random() - 0.5) * 1.2, z,
+            passed: false, size: 0.15, phase: Math.random() * 6.28
+        });
+    }
+
+    // === UPDATE ===
     update(dt, currentAngle) {
         if (dt > 0.1) dt = 0.016;
 
-        // Dynamic calibration
-        let boundsChanged = false;
-        if (currentAngle > this.calibMax) {
-            this.calibMax += (currentAngle - this.calibMax) * 0.05;
-            boundsChanged = true;
-        }
-        if (currentAngle < this.calibMin) {
-            this.calibMin -= (this.calibMin - currentAngle) * 0.05;
-            boundsChanged = true;
-        }
-        if (boundsChanged) this.api.updateCalibration(this.calibMin, this.calibMax);
+        // Calibration
+        let bc = false;
+        if (currentAngle > this.calibMax) { this.calibMax += (currentAngle - this.calibMax) * 0.05; bc = true; }
+        if (currentAngle < this.calibMin) { this.calibMin -= (this.calibMin - currentAngle) * 0.05; bc = true; }
+        if (bc) this.api.updateCalibration(this.calibMin, this.calibMax);
 
-        // Map angle to dragon X position (-1 to 1)
         let range = this.calibMax - this.calibMin;
-        let normalized = range > 0 ? (currentAngle - this.calibMin) / range : 0.5;
-        normalized = Math.max(0, Math.min(1, normalized));
-        this.dragonTargetX = (normalized - 0.5) * 2;
+        let norm = range > 0 ? (currentAngle - this.calibMin) / range : 0.5;
+        norm = Math.max(0, Math.min(1, norm));
+        this.dragonTargetX = (norm - 0.5) * 2;
 
-        // Smooth dragon movement
         let prevX = this.dragonX;
-        this.dragonX += (this.dragonTargetX - this.dragonX) * 6 * dt;
+        this.dragonX += (this.dragonTargetX - this.dragonX) * 7 * dt;
 
-        // Dragon banking (tilt when turning)
-        let deltaX = this.dragonX - prevX;
-        let targetTilt = -deltaX * 800;
-        targetTilt = Math.max(-35, Math.min(35, targetTilt));
-        this.dragonTilt += (targetTilt - this.dragonTilt) * 5 * dt;
+        let dX = this.dragonX - prevX;
+        let tgtTilt = Math.max(-30, Math.min(30, -dX * 600));
+        this.dragonTilt += (tgtTilt - this.dragonTilt) * 5 * dt;
 
-        // Wing flap animation
-        this.wingPhase += dt * 4;
-        this.dragonBobPhase += dt * 3;
-        this.dragonBob = Math.sin(this.dragonBobPhase) * 0.015;
+        this.wingPhase += dt * 5;
+        this.rainbowPhase += dt * 0.8;
+        this.sunGlow += dt * 2;
 
-        // Effects decay
-        this.shakeIntensity *= Math.pow(0.01, dt);
-        if (this.shakeIntensity < 0.2) this.shakeIntensity = 0;
+        this.shakeIntensity *= Math.pow(0.02, dt);
+        if (this.shakeIntensity < 0.3) this.shakeIntensity = 0;
         this.flashAlpha = Math.max(0, this.flashAlpha - dt * 4);
         this.hitCooldown = Math.max(0, this.hitCooldown - dt);
 
-        // Time of day cycle
-        this.timeOfDay = (this.timeOfDay + dt * 0.01) % 1;
-        this.sunAngle += dt * 0.05;
-
-        // Update particles
+        // Particles
         for (let i = this.particles.length - 1; i >= 0; i--) {
             let p = this.particles[i];
-            p.life -= dt / p.maxLife;
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            p.z += (p.vz || 0) * dt;
-            p.vy += (p.gravity || 0) * dt;
+            p.life -= dt / p.ml;
+            p.x += p.vx * dt; p.y += p.vy * dt;
+            p.vy += (p.g || 0) * dt;
             if (p.life <= 0) this.particles.splice(i, 1);
         }
 
+        // Death
         if (!this.isAlive) {
-            // Death state — wait and respawn
-            this.hitCooldown -= dt;
-            if (this.hitCooldown <= 0) {
+            this.respawnTimer -= dt;
+            if (this.respawnTimer <= 0) {
                 this.isAlive = true;
                 this.hitCooldown = 2;
             }
@@ -302,481 +229,479 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             return;
         }
 
-        // === FORWARD FLIGHT ===
-        let moveSpeed = this.baseSpeed * this.speed * dt;
-        this.worldZ += moveSpeed * 0.05;
-        this.distanceTraveled += moveSpeed;
+        // Flight
+        let moveSpd = this.baseSpeed * this.speed * dt;
+        this.worldZ += moveSpd * 0.05;
+        this.distanceTraveled += moveSpd;
         this.score += dt * 10 * this.speed;
 
-        // Difficulty progression
         this.difficultyTimer += dt;
-        this.speed = Math.min(2.5, 1.0 + this.difficultyTimer * 0.01);
+        this.speed = Math.min(2.5, 1.0 + this.difficultyTimer * 0.008);
 
-        // Spawn management
-        this.obstacleSpawnTimer -= dt;
-        this.crystalSpawnTimer -= dt;
+        // Combo decay
+        this.comboTimer -= dt;
+        if (this.comboTimer <= 0) this.combo = 0;
 
-        if (this.obstacleSpawnTimer <= 0) {
-            this._spawnObstacle(this.worldZ + 20 + Math.random() * 5);
-            let spawnInterval = Math.max(0.8, 3 - this.difficultyTimer * 0.02);
-            this.obstacleSpawnTimer = spawnInterval + Math.random() * spawnInterval;
+        // Spawning
+        this.obstacleTimer -= dt;
+        this.crystalTimer -= dt;
+        this.ringTimer -= dt;
+        if (this.obstacleTimer <= 0) {
+            this._spawnObstacle(this.worldZ + 18 + Math.random() * 5);
+            this.obstacleTimer = Math.max(1, 3.5 - this.difficultyTimer * 0.015) + Math.random() * 1.5;
+        }
+        if (this.crystalTimer <= 0) {
+            // Spawn crystals in a line/arc for easier collection
+            let baseX = (Math.random() - 0.5) * 1.4;
+            let baseZ = this.worldZ + 12 + Math.random() * 6;
+            for (let i = 0; i < 3; i++) {
+                this.crystals.push({
+                    x: baseX + (i - 1) * 0.12, z: baseZ + i * 1.2,
+                    collected: false, phase: Math.random() * 6.28, size: 0.04
+                });
+            }
+            this.crystalTimer = 2 + Math.random() * 2;
+        }
+        if (this.ringTimer <= 0) {
+            this._spawnRing(this.worldZ + 15 + Math.random() * 8);
+            this.ringTimer = 5 + Math.random() * 5;
         }
 
-        if (this.crystalSpawnTimer <= 0) {
-            this._spawnCrystal(this.worldZ + 15 + Math.random() * 10);
-            this.crystalSpawnTimer = 1.5 + Math.random() * 2;
-        }
+        // Replenish terrain
+        let mxZ = this.worldZ + 30;
+        let lastM = this.mountains.length > 0 ? Math.max(...this.mountains.map(m => m.z)) : 0;
+        while (lastM < mxZ) { lastM += 1.5 + Math.random() * 2; this._spawnMountain(lastM); }
+        let lastC = this.clouds.length > 0 ? Math.max(...this.clouds.map(c => c.z)) : 0;
+        while (lastC < mxZ) { lastC += 2 + Math.random() * 3; this._spawnCloud(lastC); }
 
-        // Replenish mountains and clouds
-        let maxZ = this.worldZ + 30;
-        let lastMtnZ = this.mountains.length > 0 ? Math.max(...this.mountains.map(m => m.z)) : 0;
-        while (lastMtnZ < maxZ) {
-            lastMtnZ += 1.5 + Math.random() * 2;
-            this._spawnMountain(lastMtnZ);
-        }
-        let lastCloudZ = this.clouds.length > 0 ? Math.max(...this.clouds.map(c => c.z)) : 0;
-        while (lastCloudZ < maxZ) {
-            lastCloudZ += 2 + Math.random() * 3;
-            this._spawnCloud(lastCloudZ);
-        }
-
-        // Remove passed objects
+        // Cleanup
         this.mountains = this.mountains.filter(m => m.z > this.worldZ - 2);
         this.clouds = this.clouds.filter(c => c.z > this.worldZ - 2);
         this.obstacles = this.obstacles.filter(o => o.z > this.worldZ - 2);
         this.crystals = this.crystals.filter(c => c.z > this.worldZ - 2);
+        this.rings = this.rings.filter(r => r.z > this.worldZ - 2);
 
-        // === COLLISION DETECTION ===
+        // Collision
         if (this.hitCooldown <= 0) {
-            for (let obs of this.obstacles) {
-                if (obs.hit) continue;
-                let relZ = obs.z - this.worldZ;
-                if (relZ > 0.3 && relZ < 1.5) {
-                    let dx = Math.abs(this.dragonX - obs.x);
-                    if (dx < obs.width * 0.8 + 0.1) {
-                        obs.hit = true;
-                        this.lives--;
-                        this.shakeIntensity = 15;
-                        this.flashAlpha = 1;
-                        this.flashColor = '#ff1744';
-                        this.hitCooldown = 2;
-                        this.score = Math.max(0, this.score - 50);
-
-                        // Spawn hit particles
-                        for (let i = 0; i < 15; i++) {
-                            this.particles.push({
-                                x: this.dragonX, y: 0.15, z: this.worldZ + 1,
-                                vx: (Math.random() - 0.5) * 2,
-                                vy: Math.random() * 1.5,
-                                vz: -Math.random() * 0.5,
-                                life: 1, maxLife: 0.8,
-                                size: 0.02 + Math.random() * 0.02,
-                                color: '#ff6e40', gravity: -2
-                            });
-                        }
-
-                        if (this.lives <= 0) {
-                            this.isAlive = false;
-                            this.hitCooldown = 3;
-                            this.lives = 3;
-                            this.score = Math.max(0, this.score - 100);
-                            this.speed = 1.0;
-                            this.difficultyTimer = Math.max(0, this.difficultyTimer - 20);
-                        }
-                        break;
+            for (let o of this.obstacles) {
+                if (o.hit) continue;
+                let rz = o.z - this.worldZ;
+                if (rz > 0.3 && rz < 1.5 && Math.abs(this.dragonX - o.x) < o.w + 0.08) {
+                    o.hit = true;
+                    this.lives--;
+                    this.shakeIntensity = 12;
+                    this.flashAlpha = 1;
+                    this.flashColor = '#ff1744';
+                    this.hitCooldown = 2;
+                    this.combo = 0;
+                    this.score = Math.max(0, this.score - 30);
+                    this._burstParticles(this.dragonX, 0.15, '#ff6e40', 12);
+                    if (this.lives <= 0) {
+                        this.isAlive = false;
+                        this.respawnTimer = 3;
+                        this.lives = 3;
+                        this.speed = 1.0;
+                        this.difficultyTimer = Math.max(0, this.difficultyTimer - 15);
                     }
+                    break;
                 }
             }
         }
 
-        // Crystal collection
+        // Crystal collection — generous hitbox
         for (let cr of this.crystals) {
             if (cr.collected) continue;
-            let relZ = cr.z - this.worldZ;
-            if (relZ > 0 && relZ < 2) {
-                let dx = Math.abs(this.dragonX - cr.x);
-                if (dx < 0.2 && relZ < 1.2) {
-                    cr.collected = true;
-                    this.crystalsCollected++;
-                    this.score += 50;
-                    this.flashAlpha = 0.5;
-                    this.flashColor = '#00f2fe';
-
-                    // Sparkle particles
-                    for (let i = 0; i < 10; i++) {
-                        this.particles.push({
-                            x: cr.x, y: cr.y, z: cr.z,
-                            vx: (Math.random() - 0.5) * 1.5,
-                            vy: Math.random() * 1,
-                            vz: 0,
-                            life: 1, maxLife: 0.6,
-                            size: 0.015 + Math.random() * 0.01,
-                            color: '#00f2fe', gravity: 0
-                        });
-                    }
-                }
+            let rz = cr.z - this.worldZ;
+            if (rz > -0.5 && rz < 2.0 && Math.abs(this.dragonX - cr.x) < 0.25) {
+                cr.collected = true;
+                this.crystalsCollected++;
+                this.combo++;
+                this.comboTimer = 3;
+                this.score += 25 * Math.max(1, this.combo);
+                this.flashAlpha = 0.3;
+                this.flashColor = '#00f2fe';
+                this._burstParticles(cr.x, 0.15, '#00f2fe', 8);
             }
         }
 
-        // Speed lines (atmosphere)
-        if (Math.random() < this.speed * 0.3) {
+        // Ring pass-through
+        for (let r of this.rings) {
+            if (r.passed) continue;
+            let rz = r.z - this.worldZ;
+            if (rz > 0 && rz < 1.5 && Math.abs(this.dragonX - r.x) < r.size + 0.1) {
+                r.passed = true;
+                this.ringsPassed++;
+                this.score += 100;
+                this.combo += 3;
+                this.comboTimer = 4;
+                this.flashAlpha = 0.4;
+                this.flashColor = '#FFD700';
+                this._burstParticles(r.x, 0.2, '#FFD700', 20);
+            }
+        }
+
+        // Speed trail
+        if (Math.random() < this.speed * 0.2) {
             this.particles.push({
-                x: (Math.random() - 0.5) * 2.5,
-                y: Math.random() * 0.8,
-                z: this.worldZ + 8 + Math.random() * 5,
-                vx: 0, vy: 0, vz: 0,
-                life: 1, maxLife: 0.4,
-                size: 0.003,
-                color: 'rgba(255,255,255,0.4)',
-                type: 'speedline'
+                x: (Math.random() - 0.5) * 2.5, y: Math.random() * 0.6, z: this.worldZ + 6 + Math.random() * 4,
+                vx: 0, vy: 0, life: 1, ml: 0.3, size: 0.003, color: 'rgba(255,255,255,0.3)', type: 'line'
             });
         }
 
         this._updateHUD();
     }
 
-    // ========================================================================
-    // HUD
-    // ========================================================================
-    _updateHUD() {
-        let dist = Math.floor(this.distanceTraveled);
-        let heartsStr = '❤️'.repeat(this.lives) + '🖤'.repeat(3 - this.lives);
-        this.api.updateHUD("hudScore", `🐉 ${Math.floor(this.score)} очків | 💎 ${this.crystalsCollected} | ${heartsStr}`);
-        this.api.updateHUD("hudBotState", `📏 ${dist}м | ⚡ x${this.speed.toFixed(1)}`);
+    _burstParticles(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+            let a = Math.random() * 6.28;
+            this.particles.push({
+                x, y, vx: Math.cos(a) * (0.5 + Math.random()),
+                vy: Math.sin(a) * (0.5 + Math.random()) + 0.5,
+                life: 1, ml: 0.7, size: 0.015 + Math.random() * 0.01,
+                color, g: 0
+            });
+        }
     }
 
-    // ========================================================================
-    // MAIN DRAW (Stereoscopic)
-    // ========================================================================
+    _updateHUD() {
+        let h = '❤️'.repeat(this.lives) + '🖤'.repeat(3 - this.lives);
+        let c = this.combo > 1 ? ` | 🔥x${this.combo}` : '';
+        this.api.updateHUD("hudScore", `🐉 ${Math.floor(this.score)} | 💎${this.crystalsCollected} | ${h}${c}`);
+        this.api.updateHUD("hudBotState", `${Math.floor(this.distanceTraveled)}м | ⚡x${this.speed.toFixed(1)}`);
+    }
+
+    // === DRAW ===
     draw() {
         const ctx = this.ctx;
         const W = this.width;
         const H = this.height;
-        const halfW = W / 2;
+        const hW = W / 2;
 
         ctx.save();
 
-        // Draw LEFT eye
+        // LEFT EYE
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, halfW, H);
-        ctx.clip();
-        this._drawEye(ctx, 0, 0, halfW, H, -this.eyeSeparation);
+        ctx.beginPath(); ctx.rect(0, 0, hW, H); ctx.clip();
+        this._drawEye(ctx, 0, 0, hW, H, -this.eyeSeparation);
         ctx.restore();
 
-        // Vertical divider line
-        ctx.strokeStyle = '#000000';
+        // Divider
+        ctx.strokeStyle = '#000';
         ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(halfW, 0);
-        ctx.lineTo(halfW, H);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(hW, 0); ctx.lineTo(hW, H); ctx.stroke();
 
-        // Draw RIGHT eye
+        // RIGHT EYE
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(halfW, 0, halfW, H);
-        ctx.clip();
-        this._drawEye(ctx, halfW, 0, halfW, H, this.eyeSeparation);
+        ctx.beginPath(); ctx.rect(hW, 0, hW, H); ctx.clip();
+        this._drawEye(ctx, hW, 0, hW, H, this.eyeSeparation);
         ctx.restore();
 
-        // Flash overlay (full screen, on top)
+        // Flash
         if (this.flashAlpha > 0) {
+            ctx.globalAlpha = this.flashAlpha * 0.15;
             ctx.fillStyle = this.flashColor;
-            ctx.globalAlpha = this.flashAlpha * 0.2;
             ctx.fillRect(0, 0, W, H);
             ctx.globalAlpha = 1;
         }
 
         // Death overlay
         if (!this.isAlive) {
-            ctx.fillStyle = 'rgba(10, 0, 0, 0.6)';
+            ctx.fillStyle = 'rgba(10, 0, 0, 0.65)';
             ctx.fillRect(0, 0, W, H);
-
-            let fs = Math.min(28, W * 0.04);
+            let fs = Math.min(26, W * 0.035);
             ctx.font = `bold ${fs}px 'Inter', sans-serif`;
             ctx.textAlign = 'center';
             ctx.fillStyle = '#ff1744';
-            ctx.fillText('💥 Зіткнення!', W * 0.25, H * 0.45);
-            ctx.fillText('💥 Зіткнення!', W * 0.75, H * 0.45);
-
-            let fs2 = Math.min(16, W * 0.025);
+            ctx.fillText('💥 Зіткнення!', W * 0.25, H * 0.4);
+            ctx.fillText('💥 Зіткнення!', W * 0.75, H * 0.4);
+            let fs2 = Math.min(15, W * 0.022);
             ctx.font = `${fs2}px 'Inter', sans-serif`;
-            ctx.fillStyle = '#94a3b8';
-            let sec = Math.ceil(this.hitCooldown);
-            ctx.fillText(`Перезапуск: ${sec}с`, W * 0.25, H * 0.55);
-            ctx.fillText(`Перезапуск: ${sec}с`, W * 0.75, H * 0.55);
+            ctx.fillStyle = '#aaa';
+            let sec = Math.ceil(this.respawnTimer);
+            ctx.fillText(`${sec}с...`, W * 0.25, H * 0.5);
+            ctx.fillText(`${sec}с...`, W * 0.75, H * 0.5);
         }
 
         ctx.restore();
     }
 
-    // ========================================================================
-    // SINGLE EYE RENDER
-    // ========================================================================
-    _drawEye(ctx, ox, oy, vw, vh, eyeOffset) {
-        // eyeOffset shifts the camera horizontally for stereo 3D
-        let headOffsetX = this.headYaw * vw * 0.15;
-        let headOffsetY = this.headPitch * vh * 0.1;
-
-        // Screen shake
+    // === SINGLE EYE ===
+    _drawEye(ctx, ox, oy, vw, vh, eyeOff) {
+        let hx = this.headYaw * vw * 0.12 + eyeOff * vw;
+        let hy = this.headPitch * vh * 0.08;
         let sx = this.shakeIntensity > 0 ? (Math.random() - 0.5) * this.shakeIntensity : 0;
         let sy = this.shakeIntensity > 0 ? (Math.random() - 0.5) * this.shakeIntensity : 0;
+        let cx = hx + sx, cy = hy + sy;
 
-        let camOffX = eyeOffset * vw + headOffsetX + sx;
-        let camOffY = headOffsetY + sy;
-
-        // === SKY ===
-        this._drawSky(ctx, ox, oy, vw, vh, camOffY);
-
-        // === STARS ===
-        this._drawStars(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === MOUNTAINS (background) ===
-        this._drawMountains3D(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === CLOUDS ===
-        this._drawClouds3D(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === GROUND / VALLEY BELOW ===
-        this._drawGround(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === OBSTACLES ===
-        this._drawObstacles3D(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === CRYSTALS ===
-        this._drawCrystals3D(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === PARTICLES ===
-        this._drawParticles3D(ctx, ox, oy, vw, vh, camOffX, camOffY);
-
-        // === DRAGON (always in front) ===
-        this._drawDragon(ctx, ox, oy, vw, vh, camOffX, camOffY);
+        this._drawSky(ctx, ox, oy, vw, vh, cy);
+        this._drawStars(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawSun(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawMtns(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawClouds(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawGround(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawRings(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawObs(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawCrystals(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawParts(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawDragon(ctx, ox, oy, vw, vh, cx, cy);
+        this._drawInEyeHUD(ctx, ox, oy, vw, vh);
     }
 
-    // ========================================================================
-    // 3D PROJECTION HELPER
-    // ========================================================================
-    _project(x, y, z, vw, vh, camOffX, camOffY) {
-        // Simple perspective projection
-        let relZ = z - this.worldZ;
-        if (relZ <= 0.1) relZ = 0.1;
-        let scale = this.focalLength / relZ;
-        let sx = vw / 2 + (x * scale * vw) + camOffX;
-        let sy = vh * 0.55 - (y * scale * vh) + camOffY;
-        return { x: sx, y: sy, scale: scale };
+    _proj(x, y, z, vw, vh, cx, cy) {
+        let rz = z - this.worldZ;
+        if (rz <= 0.1) rz = 0.1;
+        let s = 0.5 / rz;
+        return { x: vw / 2 + x * s * vw + cx, y: vh * 0.42 - y * s * vh + cy, s };
     }
 
-    // ========================================================================
-    // SKY
-    // ========================================================================
-    _drawSky(ctx, ox, oy, vw, vh, camOffY) {
-        let grad = ctx.createLinearGradient(ox, oy + camOffY, ox, oy + vh);
-        // Sunset/sunrise cycle
-        let t = this.timeOfDay;
-        if (t < 0.25) { // Dawn
-            grad.addColorStop(0, '#0a0e2a');
-            grad.addColorStop(0.4, '#1a1040');
-            grad.addColorStop(0.7, '#3d1550');
-            grad.addColorStop(1, '#ff6f00');
-        } else if (t < 0.5) { // Day
-            grad.addColorStop(0, '#0a1628');
-            grad.addColorStop(0.5, '#1a3050');
-            grad.addColorStop(1, '#2a4a70');
-        } else if (t < 0.75) { // Sunset
-            grad.addColorStop(0, '#0a0e2a');
-            grad.addColorStop(0.4, '#2a1040');
-            grad.addColorStop(0.7, '#6a2040');
-            grad.addColorStop(1, '#ff4500');
-        } else { // Night
-            grad.addColorStop(0, '#020510');
-            grad.addColorStop(0.5, '#0a0e20');
-            grad.addColorStop(1, '#101830');
-        }
-        ctx.fillStyle = grad;
+    // === SKY (vibrant gradient) ===
+    _drawSky(ctx, ox, oy, vw, vh, cy) {
+        let g = ctx.createLinearGradient(ox, oy + cy * 0.5, ox, oy + vh);
+        // Beautiful vibrant sky
+        g.addColorStop(0, '#0b0d2a');
+        g.addColorStop(0.15, '#141852');
+        g.addColorStop(0.35, '#1e3a6e');
+        g.addColorStop(0.55, '#2d6a9f');
+        g.addColorStop(0.75, '#4a9ec4');
+        g.addColorStop(0.9, '#7ecce5');
+        g.addColorStop(1, '#aee8f5');
+        ctx.fillStyle = g;
         ctx.fillRect(ox, oy, vw, vh);
+
+        // Aurora shimmer
+        ctx.save();
+        ctx.globalAlpha = 0.07;
+        ctx.globalCompositeOperation = 'screen';
+        for (let i = 0; i < 2; i++) {
+            let ag = ctx.createLinearGradient(ox, oy + vh * 0.05, ox, oy + vh * 0.25);
+            let hue = 160 + i * 50 + Math.sin(this.rainbowPhase + i * 2) * 30;
+            ag.addColorStop(0, `hsla(${hue}, 90%, 65%, 0)`);
+            ag.addColorStop(0.5, `hsla(${hue}, 90%, 65%, 0.7)`);
+            ag.addColorStop(1, `hsla(${hue}, 90%, 65%, 0)`);
+            ctx.fillStyle = ag;
+            ctx.beginPath();
+            ctx.moveTo(ox, oy + vh * 0.08);
+            for (let x = 0; x <= vw; x += 15) {
+                let y = vh * 0.12 + Math.sin(x / vw * 5 + this.rainbowPhase * (1 + i * 0.4)) * vh * 0.04;
+                ctx.lineTo(ox + x, oy + y + i * vh * 0.04);
+            }
+            ctx.lineTo(ox + vw, oy + vh * 0.3);
+            ctx.lineTo(ox, oy + vh * 0.3);
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.restore();
     }
 
-    // ========================================================================
-    // STARS
-    // ========================================================================
-    _drawStars(ctx, ox, oy, vw, vh, camOffX, camOffY) {
-        let time = performance.now() / 1000;
+    _drawStars(ctx, ox, oy, vw, vh, cx, cy) {
+        let t = performance.now() / 1000;
         for (let s of this.stars) {
-            let p = this._project(s.x, s.y + 0.5, this.worldZ + s.z, vw, vh, camOffX, camOffY);
-            if (p.x < ox || p.x > ox + vw) continue;
-            let twinkle = 0.4 + 0.6 * Math.sin(time * 2 + s.twinkle);
-            ctx.fillStyle = `rgba(255, 255, 255, ${twinkle * 0.6})`;
+            let p = this._proj(s.x, s.y + 0.6, this.worldZ + s.z, vw, vh, cx, cy);
+            if (p.x < 0 || p.x > vw) continue;
+            let tw = 0.4 + 0.6 * Math.sin(t * 2.5 + s.twinkle);
+            ctx.fillStyle = `rgba(255,255,255,${tw * 0.7})`;
             ctx.beginPath();
-            ctx.arc(ox + p.x, oy + p.y, Math.max(0.5, s.size * p.scale * 2), 0, Math.PI * 2);
+            ctx.arc(ox + p.x, oy + p.y, Math.max(0.5, s.size * p.s * 3), 0, 6.28);
             ctx.fill();
         }
     }
 
-    // ========================================================================
-    // MOUNTAINS
-    // ========================================================================
-    _drawMountains3D(ctx, ox, oy, vw, vh, camOffX, camOffY) {
-        // Sort by distance (far first)
-        let sorted = [...this.mountains].sort((a, b) => b.z - a.z);
+    // === SUN (vibrant) ===
+    _drawSun(ctx, ox, oy, vw, vh, cx, cy) {
+        let sunX = ox + vw * 0.7 + cx * 0.3;
+        let sunY = oy + vh * 0.12 + cy * 0.2;
+        let sunR = Math.min(vw, vh) * 0.06;
 
-        for (let m of sorted) {
-            let relZ = m.z - this.worldZ;
-            if (relZ < 0.5 || relZ > 25) continue;
-
-            let p = this._project(m.x, 0, m.z, vw, vh, camOffX, camOffY);
-            let scaleW = m.width * p.scale * vw;
-            let scaleH = m.height * p.scale * vh;
-
-            // Fog fade
-            let fogFade = Math.max(0, 1 - relZ * this.fogDensity * 20);
-            if (fogFade <= 0) continue;
-
-            // Mountain color
-            let baseR = m.color === 0 ? 40 : 50;
-            let baseG = m.color === 0 ? 50 : 40;
-            let baseB = m.color === 0 ? 65 : 45;
-
-            ctx.globalAlpha = fogFade;
-            ctx.fillStyle = `rgb(${baseR}, ${baseG}, ${baseB})`;
+        // Glow rings
+        for (let i = 3; i >= 0; i--) {
+            let r = sunR * (1 + i * 0.8);
+            let alpha = 0.04 - i * 0.008;
+            ctx.fillStyle = `rgba(255, 200, 50, ${alpha})`;
             ctx.beginPath();
-            ctx.moveTo(ox + p.x - scaleW, oy + p.y);
-            ctx.lineTo(ox + p.x - scaleW * 0.3, oy + p.y - scaleH);
-            ctx.lineTo(ox + p.x, oy + p.y - scaleH * 1.1);
-            ctx.lineTo(ox + p.x + scaleW * 0.4, oy + p.y - scaleH * 0.8);
-            ctx.lineTo(ox + p.x + scaleW, oy + p.y);
+            ctx.arc(sunX, sunY, r, 0, 6.28);
+            ctx.fill();
+        }
+
+        // Sun body
+        let sg = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR);
+        sg.addColorStop(0, '#fff8e1');
+        sg.addColorStop(0.5, '#ffecb3');
+        sg.addColorStop(1, 'rgba(255, 183, 77, 0.3)');
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, sunR, 0, 6.28);
+        ctx.fill();
+    }
+
+    // === MOUNTAINS (colorful) ===
+    _drawMtns(ctx, ox, oy, vw, vh, cx, cy) {
+        let sorted = [...this.mountains].sort((a, b) => b.z - a.z);
+        for (let m of sorted) {
+            let rz = m.z - this.worldZ;
+            if (rz < 0.5 || rz > 25) continue;
+            let p = this._proj(m.x, 0, m.z, vw, vh, cx, cy);
+            let sw = m.w * p.s * vw;
+            let sh = m.h * p.s * vh;
+            let fog = Math.max(0, 1 - rz * 0.04);
+            if (fog <= 0) continue;
+
+            ctx.globalAlpha = fog;
+            // Colorful mountains with green tones
+            let mg = ctx.createLinearGradient(ox + p.x, oy + p.y - sh, ox + p.x, oy + p.y);
+            mg.addColorStop(0, `hsl(${m.hue}, 35%, 30%)`);
+            mg.addColorStop(1, `hsl(${m.hue}, 25%, 18%)`);
+            ctx.fillStyle = mg;
+
+            ctx.beginPath();
+            ctx.moveTo(ox + p.x - sw, oy + p.y);
+            ctx.lineTo(ox + p.x - sw * 0.2, oy + p.y - sh * 0.9);
+            ctx.lineTo(ox + p.x, oy + p.y - sh);
+            ctx.lineTo(ox + p.x + sw * 0.3, oy + p.y - sh * 0.7);
+            ctx.lineTo(ox + p.x + sw, oy + p.y);
             ctx.closePath();
             ctx.fill();
 
-            // Snow cap
-            if (m.snowCap) {
-                ctx.fillStyle = `rgba(200, 215, 230, ${fogFade * 0.5})`;
+            // Snow
+            if (m.snow) {
+                ctx.fillStyle = `rgba(230, 240, 255, ${fog * 0.6})`;
                 ctx.beginPath();
-                ctx.moveTo(ox + p.x - scaleW * 0.15, oy + p.y - scaleH * 0.85);
-                ctx.lineTo(ox + p.x, oy + p.y - scaleH * 1.1);
-                ctx.lineTo(ox + p.x + scaleW * 0.2, oy + p.y - scaleH * 0.7);
+                ctx.moveTo(ox + p.x - sw * 0.12, oy + p.y - sh * 0.8);
+                ctx.lineTo(ox + p.x, oy + p.y - sh);
+                ctx.lineTo(ox + p.x + sw * 0.15, oy + p.y - sh * 0.65);
                 ctx.closePath();
                 ctx.fill();
             }
-
             ctx.globalAlpha = 1;
         }
     }
 
-    // ========================================================================
-    // CLOUDS
-    // ========================================================================
-    _drawClouds3D(ctx, ox, oy, vw, vh, camOffX, camOffY) {
+    _drawClouds(ctx, ox, oy, vw, vh, cx, cy) {
         for (let c of this.clouds) {
-            let relZ = c.z - this.worldZ;
-            if (relZ < 0.5 || relZ > 20) continue;
-
-            let p = this._project(c.x, c.y + 0.3, c.z, vw, vh, camOffX, camOffY);
-            let cw = c.width * p.scale * vw;
-            let ch = c.height * p.scale * vh;
-
-            let fogFade = Math.max(0, 1 - relZ * this.fogDensity * 15);
-            ctx.globalAlpha = c.opacity * fogFade;
-            ctx.fillStyle = '#d0d8e8';
-
-            // Cloud as ellipses
+            let rz = c.z - this.worldZ;
+            if (rz < 0.5 || rz > 20) continue;
+            let p = this._proj(c.x, c.y + 0.4, c.z, vw, vh, cx, cy);
+            let cw = c.w * p.s * vw;
+            let ch = c.h * p.s * vh;
+            let fog = Math.max(0, 1 - rz * 0.05);
+            ctx.globalAlpha = c.op * fog;
+            ctx.fillStyle = '#e8edf5';
             ctx.beginPath();
-            ctx.ellipse(ox + p.x, oy + p.y, cw, ch, 0, 0, Math.PI * 2);
+            ctx.ellipse(ox + p.x, oy + p.y, cw, ch, 0, 0, 6.28);
             ctx.fill();
             ctx.beginPath();
-            ctx.ellipse(ox + p.x - cw * 0.5, oy + p.y + ch * 0.2, cw * 0.6, ch * 0.8, 0, 0, Math.PI * 2);
+            ctx.ellipse(ox + p.x - cw * 0.4, oy + p.y + ch * 0.2, cw * 0.6, ch * 0.7, 0, 0, 6.28);
             ctx.fill();
-            ctx.beginPath();
-            ctx.ellipse(ox + p.x + cw * 0.4, oy + p.y + ch * 0.3, cw * 0.5, ch * 0.7, 0, 0, Math.PI * 2);
-            ctx.fill();
-
             ctx.globalAlpha = 1;
         }
     }
 
-    // ========================================================================
-    // GROUND
-    // ========================================================================
-    _drawGround(ctx, ox, oy, vw, vh, camOffX, camOffY) {
-        // Valley floor below
-        let groundY = vh * 0.7 + camOffY;
-        let grad = ctx.createLinearGradient(ox, oy + groundY, ox, oy + vh);
-        grad.addColorStop(0, 'rgba(20, 35, 20, 0.3)');
-        grad.addColorStop(1, 'rgba(10, 20, 15, 0.8)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(ox, oy + groundY, vw, vh - groundY);
+    _drawGround(ctx, ox, oy, vw, vh, cx, cy) {
+        let gy = vh * 0.85 + cy;
+        let g = ctx.createLinearGradient(ox, oy + gy, ox, oy + vh);
+        g.addColorStop(0, 'rgba(15, 45, 25, 0.4)');
+        g.addColorStop(1, 'rgba(8, 25, 15, 0.9)');
+        ctx.fillStyle = g;
+        ctx.fillRect(ox, oy + gy, vw, vh - gy);
     }
 
-    // ========================================================================
-    // OBSTACLES (Rock Pillars)
-    // ========================================================================
-    _drawObstacles3D(ctx, ox, oy, vw, vh, camOffX, camOffY) {
+    // === RINGS (golden hoops) ===
+    _drawRings(ctx, ox, oy, vw, vh, cx, cy) {
+        let t = performance.now() / 1000;
+        for (let r of this.rings) {
+            if (r.passed) continue;
+            let rz = r.z - this.worldZ;
+            if (rz < 0 || rz > 18) continue;
+            let p = this._proj(r.x, 0.15, r.z, vw, vh, cx, cy);
+            let rs = r.size * p.s * vw;
+            let fog = Math.max(0.2, 1 - rz * 0.03);
+
+            ctx.globalAlpha = fog;
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = Math.max(2, rs * 0.1);
+            ctx.shadowBlur = rs * 0.5;
+            ctx.shadowColor = '#FFD700';
+            ctx.beginPath();
+            ctx.ellipse(ox + p.x, oy + p.y, rs, rs * 0.6, 0, 0, 6.28);
+            ctx.stroke();
+            // Inner ring
+            ctx.strokeStyle = '#FFA000';
+            ctx.lineWidth = Math.max(1, rs * 0.05);
+            ctx.beginPath();
+            ctx.ellipse(ox + p.x, oy + p.y, rs * 0.85, rs * 0.5, 0, 0, 6.28);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    // === OBSTACLES ===
+    _drawObs(ctx, ox, oy, vw, vh, cx, cy) {
         let sorted = [...this.obstacles].sort((a, b) => b.z - a.z);
+        for (let o of sorted) {
+            let rz = o.z - this.worldZ;
+            if (rz < -0.5 || rz > 20) continue;
+            let p = this._proj(o.x, 0, o.z, vw, vh, cx, cy);
+            let ow = o.w * p.s * vw;
+            let oh = o.h * p.s * vh;
+            let fog = Math.max(0.15, 1 - rz * 0.04);
 
-        for (let obs of sorted) {
-            let relZ = obs.z - this.worldZ;
-            if (relZ < -0.5 || relZ > 20) continue;
-
-            let p = this._project(obs.x, 0, obs.z, vw, vh, camOffX, camOffY);
-            let ow = obs.width * p.scale * vw;
-            let oh = obs.height * p.scale * vh;
-
-            let fogFade = Math.max(0.1, 1 - relZ * this.fogDensity * 12);
-
-            // Rock pillar
-            let rockGrad = ctx.createLinearGradient(ox + p.x - ow, 0, ox + p.x + ow, 0);
-            rockGrad.addColorStop(0, `rgba(60, 50, 45, ${fogFade})`);
-            rockGrad.addColorStop(0.5, `rgba(90, 75, 65, ${fogFade})`);
-            rockGrad.addColorStop(1, `rgba(50, 40, 35, ${fogFade})`);
-
-            ctx.fillStyle = rockGrad;
+            let rg = ctx.createLinearGradient(ox + p.x - ow, 0, ox + p.x + ow, 0);
+            rg.addColorStop(0, `rgba(80, 60, 50, ${fog})`);
+            rg.addColorStop(0.5, `rgba(120, 90, 70, ${fog})`);
+            rg.addColorStop(1, `rgba(70, 50, 40, ${fog})`);
+            ctx.fillStyle = rg;
             ctx.beginPath();
             ctx.moveTo(ox + p.x - ow, oy + p.y);
-            ctx.lineTo(ox + p.x - ow * 0.7, oy + p.y - oh);
-            ctx.lineTo(ox + p.x + ow * 0.7, oy + p.y - oh);
+            ctx.lineTo(ox + p.x - ow * 0.6, oy + p.y - oh);
+            ctx.lineTo(ox + p.x + ow * 0.6, oy + p.y - oh);
             ctx.lineTo(ox + p.x + ow, oy + p.y);
             ctx.closePath();
             ctx.fill();
 
-            // Warning glow when close
-            if (relZ < 4 && !obs.hit) {
-                let urgency = Math.max(0, 1 - relZ / 4);
-                ctx.strokeStyle = `rgba(255, 23, 68, ${urgency * 0.5})`;
+            // Warning glow
+            if (rz < 4 && !o.hit) {
+                let u = Math.max(0, 1 - rz / 4);
+                ctx.strokeStyle = `rgba(255, 50, 50, ${u * 0.6})`;
                 ctx.lineWidth = 2;
                 ctx.stroke();
             }
         }
     }
 
-    // ========================================================================
-    // CRYSTALS
-    // ========================================================================
-    _drawCrystals3D(ctx, ox, oy, vw, vh, camOffX, camOffY) {
-        let time = performance.now() / 1000;
-
+    // === CRYSTALS (bright, glowing) ===
+    _drawCrystals(ctx, ox, oy, vw, vh, cx, cy) {
+        let t = performance.now() / 1000;
         for (let cr of this.crystals) {
             if (cr.collected) continue;
-            let relZ = cr.z - this.worldZ;
-            if (relZ < 0 || relZ > 18) continue;
+            let rz = cr.z - this.worldZ;
+            if (rz < 0 || rz > 18) continue;
+            let bobY = 0.15 + Math.sin(t * 3 + cr.phase) * 0.02;
+            let p = this._proj(cr.x, bobY, cr.z, vw, vh, cx, cy);
+            let cs = cr.size * p.s * vw;
+            let fog = Math.max(0.2, 1 - rz * 0.035);
 
-            let bobY = cr.y + Math.sin(time * 3 + cr.rotPhase) * 0.03;
-            let p = this._project(cr.x, bobY, cr.z, vw, vh, camOffX, camOffY);
-            let cs = cr.size * p.scale * vw;
+            ctx.globalAlpha = fog;
 
-            let fogFade = Math.max(0, 1 - relZ * this.fogDensity * 10);
-            ctx.globalAlpha = fogFade;
-
-            // Crystal glow
-            ctx.shadowBlur = cs * 3;
+            // Bright glow
+            ctx.shadowBlur = cs * 4;
             ctx.shadowColor = '#00f2fe';
 
-            // Diamond shape
-            ctx.fillStyle = '#00f2fe';
+            // Diamond
+            ctx.fillStyle = '#00e5ff';
             ctx.beginPath();
-            ctx.moveTo(ox + p.x, oy + p.y - cs);
-            ctx.lineTo(ox + p.x + cs * 0.6, oy + p.y);
+            ctx.moveTo(ox + p.x, oy + p.y - cs * 1.2);
+            ctx.lineTo(ox + p.x + cs * 0.7, oy + p.y);
             ctx.lineTo(ox + p.x, oy + p.y + cs * 0.5);
-            ctx.lineTo(ox + p.x - cs * 0.6, oy + p.y);
+            ctx.lineTo(ox + p.x - cs * 0.7, oy + p.y);
+            ctx.closePath();
+            ctx.fill();
+
+            // Inner highlight
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.beginPath();
+            ctx.moveTo(ox + p.x, oy + p.y - cs * 0.8);
+            ctx.lineTo(ox + p.x + cs * 0.3, oy + p.y - cs * 0.1);
+            ctx.lineTo(ox + p.x - cs * 0.2, oy + p.y - cs * 0.2);
             ctx.closePath();
             ctx.fill();
 
@@ -785,276 +710,141 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         }
     }
 
-    // ========================================================================
-    // PARTICLES
-    // ========================================================================
-    _drawParticles3D(ctx, ox, oy, vw, vh, camOffX, camOffY) {
+    _drawParts(ctx, ox, oy, vw, vh, cx, cy) {
         for (let p of this.particles) {
-            let proj = this._project(p.x, p.y, p.z, vw, vh, camOffX, camOffY);
-            let ps = p.size * proj.scale * vw;
-
-            ctx.globalAlpha = Math.max(0, p.life);
-            ctx.fillStyle = p.color;
-
-            if (p.type === 'speedline') {
-                ctx.fillRect(ox + proj.x - 1, oy + proj.y, 2, ps * 30);
+            if (p.z !== undefined) {
+                let pr = this._proj(p.x, p.y, p.z, vw, vh, cx, cy);
+                let ps = p.size * pr.s * vw;
+                ctx.globalAlpha = Math.max(0, p.life);
+                ctx.fillStyle = p.color;
+                if (p.type === 'line') {
+                    ctx.fillRect(ox + pr.x - 1, oy + pr.y, 2, ps * 25);
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(ox + pr.x, oy + pr.y, Math.max(1, ps), 0, 6.28);
+                    ctx.fill();
+                }
             } else {
+                // Screen-space particle
+                ctx.globalAlpha = Math.max(0, p.life);
+                ctx.fillStyle = p.color;
                 ctx.beginPath();
-                ctx.arc(ox + proj.x, oy + proj.y, Math.max(1, ps), 0, Math.PI * 2);
+                ctx.arc(ox + vw / 2 + p.x * vw * 0.3, oy + vh * 0.45 + p.y * vh * 0.2, p.size * vw, 0, 6.28);
                 ctx.fill();
             }
         }
         ctx.globalAlpha = 1;
     }
 
-    // ========================================================================
-    // DRAGON (Third Person)
-    // ========================================================================
-    _drawDragon(ctx, ox, oy, vw, vh, camOffX, camOffY) {
-        // Dragon is at fixed screen position (bottom center, close to camera)
-        let dx = vw / 2 + this.dragonX * vw * 0.3 + camOffX;
-        let dy = vh * 0.68 + this.dragonBob * vh + camOffY;
-        let scale = Math.min(vw, vh) * 0.0015;
-        if (scale < 0.4) scale = 0.4;
+    // === DRAGON ===
+    _drawDragon(ctx, ox, oy, vw, vh, cx, cy) {
+        let dx = vw / 2 + this.dragonX * vw * 0.3 + cx;
+        let dy = vh * 0.5 + cy;
+        let sc = Math.min(vw, vh) * 0.0018;
+        if (sc < 0.5) sc = 0.5;
 
-        // Invincibility flash
-        if (this.hitCooldown > 0 && this.isAlive) {
-            if (Math.floor(performance.now() / 100) % 2 === 0) {
-                ctx.globalAlpha = 0.4;
-            }
+        if (this.hitCooldown > 0 && this.isAlive && Math.floor(performance.now() / 100) % 2 === 0) {
+            ctx.globalAlpha = 0.4;
         }
 
         ctx.save();
         ctx.translate(ox + dx, oy + dy);
         ctx.rotate(this.dragonTilt * Math.PI / 180);
-        ctx.scale(scale, scale);
+        ctx.scale(sc, sc);
 
-        let wingAngle = Math.sin(this.wingPhase) * 0.5;
+        let wA = Math.sin(this.wingPhase) * 0.5;
 
-        // --- TAIL ---
+        // Tail
         ctx.strokeStyle = '#2E7D32';
         ctx.lineWidth = 5;
         ctx.beginPath();
         ctx.moveTo(0, 30);
-        ctx.quadraticCurveTo(
-            -10 + Math.sin(this.wingPhase * 0.7) * 15, 60,
-            -5 + Math.sin(this.wingPhase * 0.5) * 20, 80
-        );
+        ctx.quadraticCurveTo(-12 + Math.sin(this.wingPhase * 0.7) * 15, 60, -5 + Math.sin(this.wingPhase * 0.5) * 20, 80);
         ctx.stroke();
-        // Tail tip
         ctx.fillStyle = '#FF6F00';
+        let tx = -5 + Math.sin(this.wingPhase * 0.5) * 20;
         ctx.beginPath();
-        let tailTipX = -5 + Math.sin(this.wingPhase * 0.5) * 20;
-        ctx.moveTo(tailTipX, 80);
-        ctx.lineTo(tailTipX - 8, 90);
-        ctx.lineTo(tailTipX + 8, 90);
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(tx, 80); ctx.lineTo(tx - 8, 92); ctx.lineTo(tx + 8, 92);
+        ctx.closePath(); ctx.fill();
 
-        // --- WINGS ---
-        let wSpan = 80;
-        let wH = 25;
+        // Wings
+        this._drawWing(ctx, -15, -5, -1, wA, sc);
+        this._drawWing(ctx, 15, -5, 1, wA, sc);
 
-        // Left wing
-        ctx.save();
-        ctx.translate(-15, -5);
-        ctx.rotate(-wingAngle - 0.3);
-        let lwGrad = ctx.createLinearGradient(0, 0, -wSpan, -wH);
-        lwGrad.addColorStop(0, '#388E3C');
-        lwGrad.addColorStop(1, 'rgba(56, 142, 60, 0.4)');
-        ctx.fillStyle = lwGrad;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.quadraticCurveTo(-wSpan * 0.4, -wH * 1.5, -wSpan, -wH * 0.3);
-        ctx.lineTo(-wSpan * 0.8, wH * 0.5);
-        ctx.quadraticCurveTo(-wSpan * 0.3, wH * 0.3, 0, 10);
-        ctx.closePath();
-        ctx.fill();
-        // Wing membrane lines
-        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-        ctx.lineWidth = 1;
-        for (let i = 1; i <= 3; i++) {
-            ctx.beginPath();
-            ctx.moveTo(0, i * 2);
-            ctx.lineTo(-wSpan * (i / 4), -wH * 0.2 + i * 5);
-            ctx.stroke();
-        }
-        ctx.restore();
+        // Body
+        let bg = ctx.createLinearGradient(0, -30, 0, 35);
+        bg.addColorStop(0, '#2E7D32');
+        bg.addColorStop(0.5, '#43A047');
+        bg.addColorStop(1, '#1B5E20');
+        ctx.fillStyle = bg;
+        ctx.beginPath(); ctx.ellipse(0, 10, 16, 30, 0, 0, 6.28); ctx.fill();
 
-        // Right wing
-        ctx.save();
-        ctx.translate(15, -5);
-        ctx.rotate(wingAngle + 0.3);
-        let rwGrad = ctx.createLinearGradient(0, 0, wSpan, -wH);
-        rwGrad.addColorStop(0, '#388E3C');
-        rwGrad.addColorStop(1, 'rgba(56, 142, 60, 0.4)');
-        ctx.fillStyle = rwGrad;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.quadraticCurveTo(wSpan * 0.4, -wH * 1.5, wSpan, -wH * 0.3);
-        ctx.lineTo(wSpan * 0.8, wH * 0.5);
-        ctx.quadraticCurveTo(wSpan * 0.3, wH * 0.3, 0, 10);
-        ctx.closePath();
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-        ctx.lineWidth = 1;
-        for (let i = 1; i <= 3; i++) {
-            ctx.beginPath();
-            ctx.moveTo(0, i * 2);
-            ctx.lineTo(wSpan * (i / 4), -wH * 0.2 + i * 5);
-            ctx.stroke();
-        }
-        ctx.restore();
-
-        // --- BODY ---
-        let bodyGrad = ctx.createLinearGradient(0, -30, 0, 35);
-        bodyGrad.addColorStop(0, '#2E7D32');
-        bodyGrad.addColorStop(0.5, '#388E3C');
-        bodyGrad.addColorStop(1, '#1B5E20');
-        ctx.fillStyle = bodyGrad;
-        ctx.beginPath();
-        ctx.ellipse(0, 10, 16, 30, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Belly (lighter)
+        // Belly
         ctx.fillStyle = '#A5D6A7';
-        ctx.beginPath();
-        ctx.ellipse(0, 15, 10, 18, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Belly scale lines
-        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+        ctx.beginPath(); ctx.ellipse(0, 14, 10, 18, 0, 0, 6.28); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)';
         ctx.lineWidth = 0.5;
-        for (let i = -2; i <= 2; i++) {
-            ctx.beginPath();
-            ctx.moveTo(-8, 10 + i * 6);
-            ctx.lineTo(8, 10 + i * 6);
-            ctx.stroke();
-        }
+        for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(-8, 10 + i * 6); ctx.lineTo(8, 10 + i * 6); ctx.stroke(); }
 
-        // --- LEGS ---
+        // Legs
         ctx.fillStyle = '#2E7D32';
-        // Left leg
-        ctx.beginPath();
-        ctx.ellipse(-12, 30, 5, 8, -0.3, 0, Math.PI * 2);
-        ctx.fill();
-        // Right leg
-        ctx.beginPath();
-        ctx.ellipse(12, 30, 5, 8, 0.3, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.ellipse(-12, 30, 5, 8, -0.3, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(12, 30, 5, 8, 0.3, 0, 6.28); ctx.fill();
 
-        // --- NECK & HEAD ---
         // Neck
         ctx.fillStyle = '#2E7D32';
         ctx.beginPath();
-        ctx.moveTo(-8, -20);
-        ctx.quadraticCurveTo(-4, -40, 0, -48);
-        ctx.quadraticCurveTo(4, -40, 8, -20);
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(-8, -20); ctx.quadraticCurveTo(-4, -42, 0, -50);
+        ctx.quadraticCurveTo(4, -42, 8, -20);
+        ctx.closePath(); ctx.fill();
 
         // Head
-        let headGrad = ctx.createRadialGradient(0, -52, 0, 0, -52, 14);
-        headGrad.addColorStop(0, '#43A047');
-        headGrad.addColorStop(1, '#2E7D32');
-        ctx.fillStyle = headGrad;
-        ctx.beginPath();
-        ctx.ellipse(0, -52, 13, 11, 0, 0, Math.PI * 2);
-        ctx.fill();
+        let hg = ctx.createRadialGradient(0, -54, 0, 0, -54, 14);
+        hg.addColorStop(0, '#43A047'); hg.addColorStop(1, '#2E7D32');
+        ctx.fillStyle = hg;
+        ctx.beginPath(); ctx.ellipse(0, -54, 14, 12, 0, 0, 6.28); ctx.fill();
 
         // Snout
         ctx.fillStyle = '#388E3C';
-        ctx.beginPath();
-        ctx.ellipse(0, -62, 8, 6, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Nostrils
+        ctx.beginPath(); ctx.ellipse(0, -65, 9, 6, 0, 0, 6.28); ctx.fill();
         ctx.fillStyle = '#1B5E20';
-        ctx.beginPath();
-        ctx.arc(-3, -64, 1.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(3, -64, 1.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(-3, -67, 1.5, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.arc(3, -67, 1.5, 0, 6.28); ctx.fill();
 
         // Eyes
         ctx.fillStyle = '#FFD600';
-        ctx.beginPath();
-        ctx.ellipse(-7, -54, 4, 3.5, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(7, -54, 4, 3.5, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Pupils (vertical slit)
-        ctx.fillStyle = '#1a1a1a';
-        ctx.beginPath();
-        ctx.ellipse(-7, -54, 1.5, 3, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(7, -54, 1.5, 3, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Eye glow
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = '#FFD600';
-        ctx.fillStyle = 'rgba(255, 214, 0, 0.2)';
-        ctx.beginPath();
-        ctx.arc(-7, -54, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(7, -54, 6, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.ellipse(-7, -56, 4.5, 4, 0, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(7, -56, 4.5, 4, 0, 0, 6.28); ctx.fill();
+        ctx.fillStyle = '#111';
+        ctx.beginPath(); ctx.ellipse(-7, -56, 1.5, 3.2, 0, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(7, -56, 1.5, 3.2, 0, 0, 6.28); ctx.fill();
+        ctx.shadowBlur = 10; ctx.shadowColor = '#FFD600';
+        ctx.fillStyle = 'rgba(255,214,0,0.15)';
+        ctx.beginPath(); ctx.arc(-7, -56, 7, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.arc(7, -56, 7, 0, 6.28); ctx.fill();
         ctx.shadowBlur = 0;
 
         // Horns
-        ctx.fillStyle = '#5D4037';
-        // Left horn
-        ctx.beginPath();
-        ctx.moveTo(-10, -60);
-        ctx.lineTo(-16, -72);
-        ctx.lineTo(-8, -62);
-        ctx.closePath();
-        ctx.fill();
-        // Right horn
-        ctx.beginPath();
-        ctx.moveTo(10, -60);
-        ctx.lineTo(16, -72);
-        ctx.lineTo(8, -62);
-        ctx.closePath();
-        ctx.fill();
+        ctx.fillStyle = '#4E342E';
+        ctx.beginPath(); ctx.moveTo(-11, -62); ctx.lineTo(-17, -76); ctx.lineTo(-8, -64); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(11, -62); ctx.lineTo(17, -76); ctx.lineTo(8, -64); ctx.closePath(); ctx.fill();
 
-        // Spinal ridges
+        // Spines
         ctx.fillStyle = '#FF6F00';
         for (let i = 0; i < 5; i++) {
-            let ry = -45 + i * 14;
-            let rs = 4 - i * 0.5;
-            ctx.beginPath();
-            ctx.moveTo(0, ry - rs);
-            ctx.lineTo(-rs * 0.6, ry + rs * 0.5);
-            ctx.lineTo(rs * 0.6, ry + rs * 0.5);
-            ctx.closePath();
-            ctx.fill();
+            let ry = -48 + i * 15, rs = 5 - i * 0.6;
+            ctx.beginPath(); ctx.moveTo(0, ry - rs); ctx.lineTo(-rs * 0.7, ry + rs * 0.4); ctx.lineTo(rs * 0.7, ry + rs * 0.4); ctx.closePath(); ctx.fill();
         }
 
-        // --- FIRE BREATH (when moving fast) ---
+        // Fire
         if (this.speed > 1.3) {
-            let fireAlpha = Math.min(1, (this.speed - 1.3) * 2);
-            let fireLen = 15 + Math.random() * 10;
-            ctx.globalAlpha = fireAlpha * 0.7;
-
-            let fireGrad = ctx.createLinearGradient(0, -68, 0, -68 - fireLen);
-            fireGrad.addColorStop(0, '#FF6F00');
-            fireGrad.addColorStop(0.5, '#FF3D00');
-            fireGrad.addColorStop(1, 'rgba(255, 0, 0, 0)');
-            ctx.fillStyle = fireGrad;
-            ctx.beginPath();
-            ctx.moveTo(-4, -68);
-            ctx.lineTo(0, -68 - fireLen);
-            ctx.lineTo(4, -68);
-            ctx.closePath();
-            ctx.fill();
-
+            let fa = Math.min(1, (this.speed - 1.3) * 2);
+            let fl = 18 + Math.random() * 12;
+            ctx.globalAlpha = fa * 0.8;
+            let fg = ctx.createLinearGradient(0, -70, 0, -70 - fl);
+            fg.addColorStop(0, '#FF6F00'); fg.addColorStop(0.4, '#FF3D00'); fg.addColorStop(1, 'rgba(255,0,0,0)');
+            ctx.fillStyle = fg;
+            ctx.beginPath(); ctx.moveTo(-5, -70); ctx.lineTo(0, -70 - fl); ctx.lineTo(5, -70); ctx.closePath(); ctx.fill();
             ctx.globalAlpha = 1;
         }
 
@@ -1062,13 +852,72 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         ctx.globalAlpha = 1;
     }
 
-    // ========================================================================
-    // STOP / CLEANUP
-    // ========================================================================
+    _drawWing(ctx, tx, ty, dir, wA, sc) {
+        ctx.save();
+        ctx.translate(tx, ty);
+        ctx.rotate(dir * (-wA - 0.3));
+        let sp = 85, wh = 28;
+        let wg = ctx.createLinearGradient(0, 0, dir * sp, -wh);
+        wg.addColorStop(0, '#388E3C'); wg.addColorStop(1, 'rgba(56, 142, 60, 0.3)');
+        ctx.fillStyle = wg;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(dir * sp * 0.4, -wh * 1.6, dir * sp, -wh * 0.3);
+        ctx.lineTo(dir * sp * 0.8, wh * 0.5);
+        ctx.quadraticCurveTo(dir * sp * 0.3, wh * 0.3, 0, 10);
+        ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1;
+        for (let i = 1; i <= 3; i++) { ctx.beginPath(); ctx.moveTo(0, i * 2); ctx.lineTo(dir * sp * (i / 4), -wh * 0.15 + i * 5); ctx.stroke(); }
+        ctx.restore();
+    }
+
+    // === IN-EYE HUD (rendered on canvas for VR) ===
+    _drawInEyeHUD(ctx, ox, oy, vw, vh) {
+        let fs = Math.min(11, vw * 0.035);
+        ctx.font = `bold ${fs}px 'Inter', sans-serif`;
+        ctx.textAlign = 'center';
+
+        // Score bar (top)
+        let barW = vw * 0.85;
+        let barX = ox + (vw - barW) / 2;
+        let barY = oy + 8;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        if (ctx.roundRect) {
+            ctx.beginPath(); ctx.roundRect(barX, barY, barW, fs + 10, 6); ctx.fill();
+        } else {
+            ctx.fillRect(barX, barY, barW, fs + 10);
+        }
+
+        // Lives
+        let hearts = '❤️'.repeat(this.lives) + '🖤'.repeat(3 - this.lives);
+
+        // Left: score + crystals
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#FFD700';
+        ctx.fillText(`⭐ ${Math.floor(this.score)}`, barX + 8, barY + fs + 3);
+
+        // Center: crystals + combo
+        ctx.textAlign = 'center';
+        let comboStr = this.combo > 1 ? ` 🔥x${this.combo}` : '';
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillText(`💎 ${this.crystalsCollected}${comboStr}`, ox + vw / 2, barY + fs + 3);
+
+        // Right: lives
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#fff';
+        ctx.fillText(hearts, barX + barW - 8, barY + fs + 3);
+
+        // Distance (bottom)
+        let dist = Math.floor(this.distanceTraveled);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = `${Math.min(9, vw * 0.025)}px 'Inter', sans-serif`;
+        ctx.fillText(`${dist}м | ⚡x${this.speed.toFixed(1)}`, ox + vw / 2, oy + vh - 8);
+    }
+
     stop() {
         this.particles = [];
-        if (this._orientationHandler) {
-            window.removeEventListener('deviceorientation', this._orientationHandler);
-        }
+        if (this._orientHandler) window.removeEventListener('deviceorientation', this._orientHandler);
     }
 };
