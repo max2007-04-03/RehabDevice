@@ -739,7 +739,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
     // === DRAGON ===
     _drawDragon(ctx, ox, oy, vw, vh, cx, cy) {
         let dx = vw / 2 + this.dragonX * vw * 0.3 + cx;
-        let dy = vh * 0.5 + cy;
+        let dy = vh * 0.38 + cy;
         let sc = Math.min(vw, vh) * 0.0018;
         if (sc < 0.5) sc = 0.5;
 
