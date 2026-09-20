@@ -451,7 +451,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
         let rz = z - this.worldZ;
         if (rz <= 0.1) rz = 0.1;
         let s = 0.5 / rz;
-        return { x: vw / 2 + x * s * vw + cx, y: vh * 0.42 - y * s * vh + cy, s };
+        return { x: vw / 2 + x * s * vw + cx, y: vh * 0.65 - y * s * vh + cy, s };
     }
 
     // === SKY (vibrant gradient) ===
@@ -596,7 +596,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
     }
 
     _drawGround(ctx, ox, oy, vw, vh, cx, cy) {
-        let gy = vh * 0.85 + cy;
+        let gy = vh * 0.65 + cy;
         let g = ctx.createLinearGradient(ox, oy + gy, ox, oy + vh);
         g.addColorStop(0, 'rgba(15, 45, 25, 0.4)');
         g.addColorStop(1, 'rgba(8, 25, 15, 0.9)');
@@ -611,7 +611,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             if (r.passed) continue;
             let rz = r.z - this.worldZ;
             if (rz < 0 || rz > 18) continue;
-            let p = this._proj(r.x, 0.15, r.z, vw, vh, cx, cy);
+            let p = this._proj(r.x, 0.35, r.z, vw, vh, cx, cy);
             let rs = r.size * p.s * vw;
             let fog = Math.max(0.2, 1 - rz * 0.03);
 
@@ -675,7 +675,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
             if (cr.collected) continue;
             let rz = cr.z - this.worldZ;
             if (rz < 0 || rz > 18) continue;
-            let bobY = 0.15 + Math.sin(t * 3 + cr.phase) * 0.02;
+            let bobY = 0.35 + Math.sin(t * 3 + cr.phase) * 0.02;
             let p = this._proj(cr.x, bobY, cr.z, vw, vh, cx, cy);
             let cs = cr.size * p.s * vw;
             let fog = Math.max(0.2, 1 - rz * 0.035);
@@ -739,7 +739,7 @@ window.RehabGames['vrdragon'] = class VRDragonGame {
     // === DRAGON ===
     _drawDragon(ctx, ox, oy, vw, vh, cx, cy) {
         let dx = vw / 2 + this.dragonX * vw * 0.3 + cx;
-        let dy = vh * 0.38 + cy;
+        let dy = vh * 0.35 + cy;
         let sc = Math.min(vw, vh) * 0.0018;
         if (sc < 0.5) sc = 0.5;
 
